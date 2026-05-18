@@ -15,8 +15,6 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
-import blackvuesync.sync as _sync
-
 METRICS_DEFAULT_JOB = "blackvuesync"
 METRICS_DEFAULT_STATE_FILENAME = ".blackvuesync.metrics-state.json"
 METRIC_FAILURE_REASONS = ("http", "network", "timeout", "disk", "unknown")
@@ -51,6 +49,7 @@ class SyncMetrics:  # pylint: disable=too-many-instance-attributes
 
     run_start_monotonic: float
     run_start_timestamp: float
+    dry_run: bool = False
     metrics_job: str = METRICS_DEFAULT_JOB
     metrics_instance: str = ""
     last_successful_file_pull_timestamp_seconds: float | None = None
@@ -81,7 +80,7 @@ class SyncMetrics:  # pylint: disable=too-many-instance-attributes
         self.files_downloaded_last_run += 1
         if content_length_bytes is not None:
             self.bytes_downloaded_last_run += content_length_bytes
-        if not _sync.dry_run:
+        if not self.dry_run:
             self.last_successful_file_pull_timestamp_seconds = time.time()
 
     def record_file_download_failure(self, reason: str) -> None:

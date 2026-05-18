@@ -905,14 +905,12 @@ def test_parse_pushgateway_url_invalid(value: str) -> None:
         _metrics.parse_pushgateway_url(value)
 
 
-def test_sync_metrics_records_downloads_and_failures(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_sync_metrics_records_downloads_and_failures() -> None:
     """verifies the metrics model tracks last-run counts and last success time."""
-    monkeypatch.setattr(_sync, "dry_run", False)
     metrics = _metrics.SyncMetrics(
         run_start_monotonic=time.perf_counter(),
         run_start_timestamp=time.time(),
+        dry_run=False,
     )
 
     metrics.record_file_download(6)
@@ -944,14 +942,12 @@ def test_sync_metrics_records_downloads_and_failures(
     assert metrics.last_run_success == 0
 
 
-def test_sync_metrics_dry_run_does_not_update_last_success(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_sync_metrics_dry_run_does_not_update_last_success() -> None:
     """verifies dry-run downloads do not update persisted last-success state."""
-    monkeypatch.setattr(_sync, "dry_run", True)
     metrics = _metrics.SyncMetrics(
         run_start_monotonic=time.perf_counter(),
         run_start_timestamp=time.time(),
+        dry_run=True,
         last_successful_file_pull_timestamp_seconds=123.0,
     )
 

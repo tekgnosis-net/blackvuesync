@@ -249,6 +249,7 @@ def main() -> int:
         metrics = SyncMetrics(
             run_start_monotonic=time.perf_counter(),
             run_start_timestamp=time.time(),
+            dry_run=args.dry_run,
             metrics_job=args.metrics_job,
             metrics_instance=args.metrics_instance or args.address,
         )
