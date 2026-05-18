@@ -151,7 +151,7 @@ class TestTriggerNow:
         client, pub = logged_in_client
         with patch("blackvuesync.server.sync_runner._do_sync") as mock_sync:
 
-            def _stub(_s: Any, p: ProgressPublisher, _m: Any, *, job_id: str) -> None:
+            def _stub(_s: Any, p: ProgressPublisher, *, job_id: str) -> None:
                 p.begin_job(0, job_id=job_id)
                 p.end_job(success=True)
 
@@ -173,7 +173,7 @@ class TestTriggerNow:
         started = threading.Event()
         proceed = threading.Event()
 
-        def _slow_sync(_s: Any, p: ProgressPublisher, _m: Any, *, job_id: str) -> None:
+        def _slow_sync(_s: Any, p: ProgressPublisher, *, job_id: str) -> None:
             p.begin_job(0, job_id=job_id)
             started.set()
             proceed.wait(timeout=5.0)

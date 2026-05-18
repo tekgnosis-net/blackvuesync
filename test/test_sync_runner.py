@@ -49,7 +49,6 @@ def _make_settings(**overrides: Any) -> MagicMock:
 def _noop(
     _settings: Any,
     pub: ProgressPublisher,
-    _msf: Any,
     *,
     job_id: str,
 ) -> None:
@@ -61,7 +60,6 @@ def _noop(
 def _slow_noop(
     _settings: Any,
     pub: ProgressPublisher,
-    _msf: Any,
     *,
     job_id: str,
     started: threading.Event,
@@ -102,11 +100,10 @@ class TestTriggerSync:
         def _slow(
             s: Any,
             p: ProgressPublisher,
-            msf: Any,
             *,
             job_id: str,  # noqa: ARG001
         ) -> None:
-            _slow_noop(s, p, msf, job_id=job_id, started=started, proceed=proceed)
+            _slow_noop(s, p, job_id=job_id, started=started, proceed=proceed)
 
         with patch("blackvuesync.server.sync_runner._do_sync", side_effect=_slow):
             result1 = trigger_sync(settings, pub)
@@ -128,11 +125,10 @@ class TestTriggerSync:
         def _slow(
             s: Any,
             p: ProgressPublisher,
-            msf: Any,
             *,
             job_id: str,  # noqa: ARG001
         ) -> None:
-            _slow_noop(s, p, msf, job_id=job_id, started=started, proceed=proceed)
+            _slow_noop(s, p, job_id=job_id, started=started, proceed=proceed)
 
         with patch("blackvuesync.server.sync_runner._do_sync", side_effect=_slow):
             result1 = trigger_sync(settings, pub)
@@ -151,7 +147,6 @@ class TestTriggerSync:
         def _fast(
             _s: Any,
             p: ProgressPublisher,
-            _msf: Any,
             *,
             job_id: str,  # noqa: ARG001
         ) -> None:
@@ -181,7 +176,6 @@ class TestTriggerSync:
         def _record(
             _s: Any,
             p: ProgressPublisher,
-            _msf: Any,
             *,
             job_id: str,  # noqa: ARG001
         ) -> None:
