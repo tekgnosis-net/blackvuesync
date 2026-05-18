@@ -284,8 +284,12 @@ def test_post_login_next_protocol_relative_redirects_to_root(
     """verifies //evil.com is rejected: redirect goes to / not the attacker site."""
     with app_with_password.test_client() as c:
         r = c.post(
-            "/login?next=//evil.com",
-            data={"username": "admin", "password": "correct-password-123"},
+            "/login",
+            data={
+                "username": "admin",
+                "password": "correct-password-123",
+                "next": "//evil.com",
+            },
         )
     assert r.status_code == 302
     assert r.headers["Location"] == "/"
@@ -297,8 +301,12 @@ def test_post_login_next_absolute_http_redirects_to_root(
     """verifies http://evil.com is rejected: redirect goes to /."""
     with app_with_password.test_client() as c:
         r = c.post(
-            "/login?next=http://evil.com",
-            data={"username": "admin", "password": "correct-password-123"},
+            "/login",
+            data={
+                "username": "admin",
+                "password": "correct-password-123",
+                "next": "http://evil.com",
+            },
         )
     assert r.status_code == 302
     assert r.headers["Location"] == "/"
@@ -310,8 +318,12 @@ def test_post_login_next_javascript_scheme_redirects_to_root(
     """verifies javascript:alert(1) is rejected: redirect goes to /."""
     with app_with_password.test_client() as c:
         r = c.post(
-            "/login?next=javascript:alert(1)",
-            data={"username": "admin", "password": "correct-password-123"},
+            "/login",
+            data={
+                "username": "admin",
+                "password": "correct-password-123",
+                "next": "javascript:alert(1)",
+            },
         )
     assert r.status_code == 302
     assert r.headers["Location"] == "/"
@@ -323,8 +335,12 @@ def test_post_login_next_legit_path_is_honored(
     """verifies a relative path like /settings is honored after login."""
     with app_with_password.test_client() as c:
         r = c.post(
-            "/login?next=/settings",
-            data={"username": "admin", "password": "correct-password-123"},
+            "/login",
+            data={
+                "username": "admin",
+                "password": "correct-password-123",
+                "next": "/settings",
+            },
         )
     assert r.status_code == 302
     assert r.headers["Location"] == "/settings"

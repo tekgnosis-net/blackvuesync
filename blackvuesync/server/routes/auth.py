@@ -28,6 +28,12 @@ from blackvuesync.server.auth import (
 
 bp = Blueprint("auth_bp", __name__)
 
+# template paths and endpoint names extracted as constants per python:S1192
+_LOGIN_TEMPLATE = "login.html"
+_FIRST_RUN_TEMPLATE = "first_run.html"
+_LOGIN_ENDPOINT = "auth_bp.login"
+_FIRST_RUN_ENDPOINT = "auth_bp.first_run"
+
 # minimum response time for a failed login in seconds; guards against timing attacks
 _MIN_FAILURE_SECONDS = 1.5
 
@@ -48,17 +54,22 @@ def redirect_to_first_run() -> Response | None:
         return None
     settings = current_app.settings_store.get()  # type: ignore[attr-defined]
     if not settings.auth.password_hash:
-        return redirect(url_for("auth_bp.first_run"))
+        return redirect(url_for(_FIRST_RUN_ENDPOINT))
     return None
 
 
 @bp.route("/login", methods=["GET"])
 def login() -> str | Response:
-    """renders the login form; redirects to /first-run if no password is set."""
+    """renders the login form; redirects to /first-run if no password is set.
+
+    the optional `next` query parameter is read here once and passed into the
+    template as a hidden form field; the POST handler then reads it from the
+    form body. this avoids query-params-on-POST (python:S8370).
+    """
     settings = current_app.settings_store.get()  # type: ignore[attr-defined]
     if not settings.auth.password_hash:
-        return redirect(url_for("auth_bp.first_run"))
-    return render_template("login.html")
+        return redirect(url_for(_FIRST_RUN_ENDPOINT))
+    return render_template(_LOGIN_TEMPLATE, next=request.args.get("next", ""))
 
 
 @bp.route("/login", methods=["POST"])
@@ -70,11 +81,15 @@ def login_post() -> tuple[str, int] | Response:
     auth = settings.auth
     ip = request.remote_addr or "unknown"
 
+    next_url = request.form.get("next", "")
+
     if is_login_locked_out(ip):
         _pad_response_time(start)
         return (
             render_template(
-                "login.html", error="too many failed attempts; try again later"
+                _LOGIN_TEMPLATE,
+                error="too many failed attempts; try again later",
+                next=next_url,
             ),
             429,
         )
@@ -94,18 +109,22 @@ def login_post() -> tuple[str, int] | Response:
     if not (username_ok and password_ok):
         record_login_failure(ip)
         _pad_response_time(start)
-        return render_template("login.html", error="invalid username or password"), 401
+        return (
+            render_template(
+                _LOGIN_TEMPLATE,
+                error="invalid username or password",
+                next=next_url,
+            ),
+            401,
+        )
 
     clear_login_failures(ip)
     session.clear()
     session["user"] = auth.username
     session.permanent = True
 
-    next_url = (
-        request.args.get("next")
-        or request.form.get("next")
-        or url_for("ui_bp.dashboard")
-    )
+    if not next_url:
+        next_url = url_for("ui_bp.dashboard")
     # prevent open-redirect: reject any url with a scheme or netloc (e.g.
     # //evil.com, http://evil.com, javascript:...) and any non-path value.
     _parsed = urlparse(next_url)
@@ -128,7 +147,7 @@ def _pad_response_time(start: float) -> None:
 def logout() -> Response:
     """clears the session and redirects to /login."""
     session.clear()
-    return redirect(url_for("auth_bp.login"))
+    return redirect(url_for(_LOGIN_ENDPOINT))
 
 
 @bp.route("/first-run", methods=["GET"])
@@ -136,8 +155,8 @@ def first_run() -> str | Response:
     """renders the first-run wizard; redirects to /login if a password is already set."""
     settings = current_app.settings_store.get()  # type: ignore[attr-defined]
     if settings.auth.password_hash:
-        return redirect(url_for("auth_bp.login"))
-    return render_template("first_run.html")
+        return redirect(url_for(_LOGIN_ENDPOINT))
+    return render_template(_FIRST_RUN_TEMPLATE)
 
 
 @bp.route("/first-run", methods=["POST"])
@@ -145,7 +164,7 @@ def first_run_post() -> tuple[str, int] | Response:
     """processes the first-run form: validates and stores the initial password."""
     settings = current_app.settings_store.get()  # type: ignore[attr-defined]
     if settings.auth.password_hash:
-        return redirect(url_for("auth_bp.login"))
+        return redirect(url_for(_LOGIN_ENDPOINT))
 
     username = request.form.get("username", "admin").strip() or "admin"
     password = request.form.get("password", "")
@@ -154,7 +173,7 @@ def first_run_post() -> tuple[str, int] | Response:
     if len(password) < _MIN_PASSWORD_LENGTH:
         return (
             render_template(
-                "first_run.html",
+                _FIRST_RUN_TEMPLATE,
                 error=f"password must be at least {_MIN_PASSWORD_LENGTH} characters",
                 username=username,
             ),
@@ -164,7 +183,7 @@ def first_run_post() -> tuple[str, int] | Response:
     if password != confirm:
         return (
             render_template(
-                "first_run.html",
+                _FIRST_RUN_TEMPLATE,
                 error="passwords do not match",
                 username=username,
             ),
@@ -178,4 +197,4 @@ def first_run_post() -> tuple[str, int] | Response:
             auth=dataclasses.replace(s.auth, username=username, password_hash=pw_hash),
         )
     )
-    return redirect(url_for("auth_bp.login"))
+    return redirect(url_for(_LOGIN_ENDPOINT))

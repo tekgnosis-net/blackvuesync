@@ -10,7 +10,7 @@ from blackvuesync.server.auth import login_required
 bp = Blueprint("ui_bp", __name__)
 
 
-@bp.route("/")
+@bp.route("/", methods=["GET"])
 @login_required
 def dashboard() -> str:
     """renders the dashboard placeholder page."""
@@ -21,7 +21,7 @@ def dashboard() -> str:
     )
 
 
-@bp.route("/settings")
+@bp.route("/settings", methods=["GET"])
 @login_required
 def settings() -> str:
     """renders the settings placeholder page."""
@@ -32,7 +32,7 @@ def settings() -> str:
     )
 
 
-@bp.route("/logs")
+@bp.route("/logs", methods=["GET"])
 @login_required
 def logs() -> str:
     """renders the log viewer placeholder page."""
@@ -43,7 +43,7 @@ def logs() -> str:
     )
 
 
-@bp.route("/stats")
+@bp.route("/stats", methods=["GET"])
 @login_required
 def stats() -> str:
     """renders the statistics placeholder page."""
@@ -54,7 +54,7 @@ def stats() -> str:
     )
 
 
-@bp.route("/viewer")
+@bp.route("/viewer", methods=["GET"])
 @login_required
 def viewer() -> str:
     """renders the dashcam viewer placeholder page."""

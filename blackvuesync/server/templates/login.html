@@ -11,8 +11,9 @@
     <div class="alert alert-error" role="alert">{{ error }}</div>
     {% endif %}
 
-    <form method="post" action="{{ url_for('auth_bp.login_post') }}{% if request.args.get('next') %}?next={{ request.args.get('next') }}{% endif %}">
+    <form method="post" action="{{ url_for('auth_bp.login_post') }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <input type="hidden" name="next" value="{{ next or '' }}">
 
       <div class="form-group">
         <label class="form-label" for="username">Username</label>
