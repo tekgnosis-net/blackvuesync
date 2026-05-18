@@ -1,7 +1,7 @@
 version: '3.0'
 services:
   blackvuesync:
-    image: acolomba/blackvuesync
+    image: ghcr.io/tekgnosis-net/blackvuesync
     container_name: blackvuesync
     restart: unless-stopped
     volumes:

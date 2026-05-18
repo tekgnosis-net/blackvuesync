@@ -16,7 +16,7 @@
     "cucumberautocomplete.strictGherkinCompletion": true,
     "cucumberautocomplete.strictGherkinValidation": true,
     "sonarlint.connectedMode.project": {
-        "connectionId": "acolomba",
-        "projectKey": "acolomba_blackvuesync"
+        "connectionId": "tekgnosis-net",
+        "projectKey": "tekgnosis-net_blackvuesync"
     }
 }
