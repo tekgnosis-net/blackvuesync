@@ -42,6 +42,7 @@ ENV ADDRESS="" \
 COPY --chown=dashcam blackvuesync.sh /blackvuesync.sh
 RUN chmod +x /blackvuesync.sh
 
-COPY --chown=dashcam blackvuesync.py /blackvuesync.py
+COPY --chown=dashcam blackvuesync /app/blackvuesync
+ENV PYTHONPATH=/app
 
 ENTRYPOINT [ "/entrypoint.sh"]

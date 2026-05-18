@@ -1,27 +1,6 @@
-#!/usr/bin/env python3
-"""
-Synchronizes recordings from a BlackVue dashcam with a local directory over a LAN.
-https://github.com/tekgnosis-net/blackvuesync
-"""
+"""sync core: filename parsing, dashcam HTTP client, download, retention, locking."""
 
 from __future__ import annotations
-
-# Copyright 2018-2026 Alessandro Colomba (https://github.com/acolomba)
-#
-# Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
-# documentation files (the "Software"), to deal in the Software without restriction, including without limitation the
-# rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit
-# persons to whom the Software is furnished to do so, subject to the following conditions:
-#
-# The above copyright notice and this permission notice shall be included in all copies or substantial portions of the
-# Software.
-#
-# THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE
-# WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
-# COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
-# OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
-
-__version__ = "2.2.0a4"
 
 import argparse
 import contextlib
@@ -37,16 +16,18 @@ import re
 import shutil
 import socket
 import stat
-import sys
 import time
-import urllib
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-# logging
+if TYPE_CHECKING:
+    from blackvuesync.metrics import SyncMetrics
+
+# logging format strings and accepted values
 TEXT_LOG_FORMAT = "%(asctime)s: %(levelname)s %(message)s"
 LOG_FORMATS = ("text", "json")
 LOG_RECORD_RESERVED_FIELDS = frozenset(logging.makeLogRecord({}).__dict__) | {
@@ -127,431 +108,14 @@ def flush_logs() -> None:
         handler.flush()
 
 
-METRICS_DEFAULT_JOB = "blackvuesync"
-METRICS_DEFAULT_STATE_FILENAME = ".blackvuesync.metrics-state.json"
-METRIC_FAILURE_REASONS = ("http", "network", "timeout", "disk", "unknown")
-
-
-def parse_pushgateway_url(value: str) -> str:
-    """parses and validates a Pushgateway URL."""
-    parsed_url = urllib.parse.urlparse(value)
-    if parsed_url.scheme not in ("http", "https") or not parsed_url.netloc:
-        raise argparse.ArgumentTypeError(
-            "metrics pushgateway URL must be an http or https URL"
-        )
-    return value.rstrip("/")
-
-
-def default_metrics_state_file(destination: str) -> str:
-    """returns the default metrics state file path for a destination."""
-    return os.path.join(destination, METRICS_DEFAULT_STATE_FILENAME)
-
-
-def metrics_enabled(args: argparse.Namespace) -> bool:
-    """returns whether any metrics sink has been configured."""
-    return bool(args.metrics_file or args.metrics_pushgateway_url)
-
-
-@dataclass
-class SyncMetrics:  # pylint: disable=too-many-instance-attributes
-    """tracks metrics for a single sync run."""
-
-    run_start_monotonic: float
-    run_start_timestamp: float
-    metrics_job: str = METRICS_DEFAULT_JOB
-    metrics_instance: str = ""
-    last_successful_file_pull_timestamp_seconds: float | None = None
-    last_run_timestamp_seconds: float | None = None
-    last_run_success: int = 0
-    last_run_exit_code: int | None = None
-    last_run_failures: dict[str, int] | None = None
-    run_duration_seconds: float = 0.0
-    dashcam_recordings_seen: int = 0
-    recordings_selected: int = 0
-    files_downloaded_last_run: int = 0
-    bytes_downloaded_last_run: int = 0
-    destination_disk_used_ratio: float | None = None
-    failed_marker_files: int = 0
-    file_download_failures_last_run: dict[str, int] | None = None
-
-    def __post_init__(self) -> None:
-        """initializes mutable metric fields."""
-        if self.file_download_failures_last_run is None:
-            self.file_download_failures_last_run = dict.fromkeys(
-                METRIC_FAILURE_REASONS, 0
-            )
-        if self.last_run_failures is None:
-            self.last_run_failures = dict.fromkeys(METRIC_FAILURE_REASONS, 0)
-
-    def record_file_download(self, content_length_bytes: int | None) -> None:
-        """records a successful file download."""
-        self.files_downloaded_last_run += 1
-        if content_length_bytes is not None:
-            self.bytes_downloaded_last_run += content_length_bytes
-        if not dry_run:
-            self.last_successful_file_pull_timestamp_seconds = time.time()
-
-    def record_file_download_failure(self, reason: str) -> None:
-        """records a file download failure."""
-        if self.file_download_failures_last_run is None:
-            self.file_download_failures_last_run = {}
-        if reason not in self.file_download_failures_last_run:
-            reason = "unknown"
-        self.file_download_failures_last_run[reason] += 1
-
-    def record_run_failure(self, reason: str) -> None:
-        """records a run-level failure reason."""
-        if self.last_run_failures is None:
-            self.last_run_failures = {}
-        if reason not in self.last_run_failures:
-            reason = "unknown"
-        self.last_run_failures[reason] = 1
-
-    def record_destination_disk_usage(self, used: int, total: int) -> None:
-        """records destination disk usage ratio."""
-        self.destination_disk_used_ratio = used / total
-
-    def finalize(self, exit_code: int, sync_success: bool) -> None:
-        """finalizes metrics after a run completes."""
-        self.last_run_timestamp_seconds = time.time()
-        self.last_run_success = 1 if sync_success else 0
-        self.last_run_exit_code = exit_code
-        self.run_duration_seconds = time.perf_counter() - self.run_start_monotonic
-
-
-def classify_run_failure(error: BaseException) -> str:
-    """classifies a run-level failure for metrics."""
-    error_message = str(error).lower()
-    if "not enough disk space" in error_message:
-        return "disk"
-    if "timed out" in error_message or "timeout" in error_message:
-        return "timeout"
-    if "dashcam unavailable" in error_message or "network" in error_message:
-        return "network"
-    if "http error" in error_message or "status code" in error_message:
-        return "http"
-    return "unknown"
-
-
-def load_metrics_state(state_file: str) -> float | None:
-    """loads persisted metrics state from disk."""
-    try:
-        with open(state_file, encoding="utf-8") as f:
-            state = json.load(f)
-    except FileNotFoundError:
-        return None
-    except (OSError, json.JSONDecodeError, TypeError) as e:
-        cron_logger.warning(
-            "Could not read metrics state file : %s; error : %s; ignoring.",
-            state_file,
-            e,
-        )
-        return None
-
-    value = state.get("last_successful_file_pull_timestamp_seconds")
-    if isinstance(value, (int, float)):
-        return float(value)
-
-    cron_logger.warning(
-        "Invalid metrics state file : %s; ignoring.",
-        state_file,
-    )
-    return None
-
-
-def save_metrics_state(state_file: str, metrics: SyncMetrics) -> None:
-    """saves persisted metrics state to disk."""
-    if metrics.last_successful_file_pull_timestamp_seconds is None:
-        return
-
-    state = {
-        "last_successful_file_pull_timestamp_seconds": (
-            metrics.last_successful_file_pull_timestamp_seconds
-        )
-    }
-    try:
-        with open(state_file, "w", encoding="utf-8") as f:
-            json.dump(state, f, separators=(",", ":"))
-            f.write("\n")
-    except OSError as e:
-        cron_logger.warning(
-            "Could not write metrics state file : %s; error : %s; ignoring.",
-            state_file,
-            e,
-        )
-
-
-def count_failed_marker_files(destination: str) -> int:
-    """counts failed marker files under the destination."""
-    marker_glob = os.path.join(destination, "**", "*.failed")
-    return len(glob.glob(marker_glob, recursive=True))
-
-
-def _escape_prometheus_label_value(value: str) -> str:
-    """escapes a Prometheus label value."""
-    return value.replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
-
-
-def _format_prometheus_sample(
-    name: str, value: int | float, labels: dict[str, str] | None = None
-) -> str:
-    """formats one Prometheus sample."""
-    if not labels:
-        return f"{name} {value}"
-
-    label_text = ",".join(
-        f'{key}="{_escape_prometheus_label_value(label_value)}"'
-        for key, label_value in sorted(labels.items())
-    )
-    return f"{name}{{{label_text}}} {value}"
-
-
-def render_metrics(metrics: SyncMetrics) -> str:
-    """renders metrics in Prometheus text exposition format."""
-    metric_definitions: list[tuple[str, str, list[str]]] = [
-        (
-            "blackvuesync_last_run_timestamp_seconds",
-            "Unix timestamp for the most recent completed run.",
-            [
-                _format_prometheus_sample(
-                    "blackvuesync_last_run_timestamp_seconds",
-                    metrics.last_run_timestamp_seconds or 0,
-                )
-            ],
-        ),
-        (
-            "blackvuesync_last_run_success",
-            "Whether the most recent run completed a successful sync.",
-            [
-                _format_prometheus_sample(
-                    "blackvuesync_last_run_success",
-                    metrics.last_run_success,
-                )
-            ],
-        ),
-        (
-            "blackvuesync_last_run_exit_code",
-            "Process exit code for the most recent run.",
-            [
-                _format_prometheus_sample(
-                    "blackvuesync_last_run_exit_code",
-                    (
-                        metrics.last_run_exit_code
-                        if metrics.last_run_exit_code is not None
-                        else 0
-                    ),
-                )
-            ],
-        ),
-        (
-            "blackvuesync_last_run_failure",
-            "Run-level failure reason for the most recent run.",
-            [
-                _format_prometheus_sample(
-                    "blackvuesync_last_run_failure",
-                    value,
-                    {"reason": reason},
-                )
-                for reason, value in sorted((metrics.last_run_failures or {}).items())
-            ],
-        ),
-        (
-            "blackvuesync_last_successful_file_pull_timestamp_seconds",
-            "Unix timestamp for the most recent successful file pull.",
-            [
-                _format_prometheus_sample(
-                    "blackvuesync_last_successful_file_pull_timestamp_seconds",
-                    metrics.last_successful_file_pull_timestamp_seconds or 0,
-                )
-            ],
-        ),
-        (
-            "blackvuesync_file_download_failures_last_run",
-            "File download failures observed in the most recent run.",
-            [
-                _format_prometheus_sample(
-                    "blackvuesync_file_download_failures_last_run",
-                    count,
-                    {"reason": reason},
-                )
-                for reason, count in sorted(
-                    (metrics.file_download_failures_last_run or {}).items()
-                )
-            ],
-        ),
-        (
-            "blackvuesync_files_downloaded_last_run",
-            "Files downloaded in the most recent run.",
-            [
-                _format_prometheus_sample(
-                    "blackvuesync_files_downloaded_last_run",
-                    metrics.files_downloaded_last_run,
-                )
-            ],
-        ),
-        (
-            "blackvuesync_run_duration_seconds",
-            "Elapsed runtime for the most recent run.",
-            [
-                _format_prometheus_sample(
-                    "blackvuesync_run_duration_seconds",
-                    metrics.run_duration_seconds,
-                )
-            ],
-        ),
-        (
-            "blackvuesync_dashcam_recordings_seen",
-            "Recordings returned by the dashcam index in the most recent run.",
-            [
-                _format_prometheus_sample(
-                    "blackvuesync_dashcam_recordings_seen",
-                    metrics.dashcam_recordings_seen,
-                )
-            ],
-        ),
-        (
-            "blackvuesync_recordings_selected",
-            "Recordings selected for download after filtering in the most recent run.",
-            [
-                _format_prometheus_sample(
-                    "blackvuesync_recordings_selected",
-                    metrics.recordings_selected,
-                )
-            ],
-        ),
-        (
-            "blackvuesync_bytes_downloaded_last_run",
-            "Bytes downloaded in the most recent run.",
-            [
-                _format_prometheus_sample(
-                    "blackvuesync_bytes_downloaded_last_run",
-                    metrics.bytes_downloaded_last_run,
-                )
-            ],
-        ),
-        (
-            "blackvuesync_destination_disk_used_ratio",
-            "Destination disk usage ratio observed during the most recent run.",
-            [
-                _format_prometheus_sample(
-                    "blackvuesync_destination_disk_used_ratio",
-                    metrics.destination_disk_used_ratio or 0,
-                )
-            ],
-        ),
-        (
-            "blackvuesync_failed_marker_files",
-            "Failed marker files under the destination.",
-            [
-                _format_prometheus_sample(
-                    "blackvuesync_failed_marker_files",
-                    metrics.failed_marker_files,
-                )
-            ],
-        ),
-    ]
-
-    lines = []
-    for metric_name, help_text, samples in metric_definitions:
-        lines.append(f"# HELP {metric_name} {help_text}")
-        lines.append(f"# TYPE {metric_name} gauge")
-        lines.extend(samples)
-
-    return "\n".join(lines) + "\n"
-
-
-def write_metrics_file(metrics_file: str, payload: str) -> None:
-    """writes a metrics file atomically."""
-    metrics_dir = os.path.dirname(metrics_file) or "."
-    temp_file = os.path.join(metrics_dir, f".{os.path.basename(metrics_file)}.tmp")
-    try:
-        with open(temp_file, "w", encoding="utf-8") as f:
-            f.write(payload)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(temp_file, metrics_file)
-    except OSError as e:
-        with contextlib.suppress(OSError):
-            os.remove(temp_file)
-        cron_logger.warning(
-            "Could not write metrics file : %s; error : %s; ignoring.",
-            metrics_file,
-            e,
-        )
-
-
-def _quote_pushgateway_grouping_value(value: str) -> str:
-    """quotes a Pushgateway grouping value for a path segment."""
-    return urllib.parse.quote(value, safe="")
-
-
-def get_pushgateway_metrics_url(
-    pushgateway_url: str, metrics_job: str, metrics_instance: str
-) -> str:
-    """returns the Pushgateway metrics endpoint URL."""
-    return (
-        f"{pushgateway_url.rstrip('/')}/metrics/job/"
-        f"{_quote_pushgateway_grouping_value(metrics_job)}/instance/"
-        f"{_quote_pushgateway_grouping_value(metrics_instance)}"
-    )
-
-
-def push_metrics(
-    pushgateway_url: str,
-    metrics_job: str,
-    metrics_instance: str,
-    payload: str,
-    timeout: float,
-) -> None:
-    """pushes metrics to a Pushgateway."""
-    url = get_pushgateway_metrics_url(pushgateway_url, metrics_job, metrics_instance)
-    request = urllib.request.Request(
-        url,
-        data=payload.encode("utf-8"),
-        method="PUT",
-        headers={"Content-Type": "text/plain; version=0.0.4; charset=utf-8"},
-    )
-    try:
-        with urllib.request.urlopen(request, timeout=timeout):
-            pass
-    except (urllib.error.URLError, TimeoutError, socket.timeout, OSError) as e:
-        cron_logger.warning(
-            "Could not push metrics to Pushgateway : %s; error : %s; ignoring.",
-            url,
-            e,
-        )
-
-
-def emit_metrics(
-    metrics: SyncMetrics,
-    metrics_file: str | None,
-    pushgateway_url: str | None,
-    timeout: float,
-) -> None:
-    """emits metrics to all configured sinks."""
-    payload = render_metrics(metrics)
-
-    if metrics_file:
-        write_metrics_file(metrics_file, payload)
-
-    if pushgateway_url:
-        push_metrics(
-            pushgateway_url,
-            metrics.metrics_job,
-            metrics.metrics_instance,
-            payload,
-            timeout,
-        )
-
-
 # max disk usage percent
-max_disk_used_percent = None  # pylint: disable=invalid-name
+max_disk_used_percent: int | None = None  # pylint: disable=invalid-name
 
 # socket timeout
-socket_timeout = None  # pylint: disable=invalid-name
+socket_timeout: float | None = None  # pylint: disable=invalid-name
 
 # indicator that we're doing a dry run
-dry_run = None  # pylint: disable=invalid-name
+dry_run: bool | None = None  # pylint: disable=invalid-name
 
 # minimum elapsed time before retrying a failed download
 retry_failed_after: datetime.timedelta = datetime.timedelta(days=1)  # pylint: disable=invalid-name  # fmt: skip
@@ -577,7 +141,7 @@ dashcam_unavailable_errno_codes = (
 )
 
 # for unit testing
-today = datetime.date.today()
+today: datetime.date = datetime.date.today()
 
 # valid metadata type codes for --skip-metadata
 VALID_METADATA_TYPES = frozenset("t3g")
@@ -751,7 +315,7 @@ def to_recording(filename: str, grouping: str) -> Recording | None:
     )
 
 
-# pattern of a recording filename as returned in each line from from the dashcam index page
+# pattern of a recording filename as returned in each line from the dashcam index page
 file_line_re = re.compile(r"n:/Record/(?P<filename>.*\.mp4),s:1000000\r\n")
 
 
@@ -1436,7 +1000,10 @@ def sync(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     """synchronizes the recordings at the dashcam address with the destination directory"""
     prepare_destination(destination, grouping)
 
-    base_url = f"http://{address}"
+    # BlackVue dashcam firmware exposes only HTTP on the LAN web server;
+    # HTTPS is not supported at the device. Deployment context is a trusted
+    # LAN. The trailing NOSONAR on the next line suppresses python:S5332.
+    base_url = f"http://{address}"  # NOSONAR
     dashcam_filenames = get_dashcam_filenames(base_url)
     dashcam_recordings = [
         r for x in dashcam_filenames if (r := to_recording(x, grouping)) is not None
@@ -1510,9 +1077,13 @@ def lock(destination: str) -> int:
     lf_flags = os.O_WRONLY | os.O_CREAT
     lf_mode = stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH  # This is 0o222, i.e. 146
 
-    # Create lock file
-    # Regarding umask, see https://stackoverflow.com/a/15015748/832230
-    umask_original = os.umask(0)
+    # creates the lock file with mode 0o222 (world-writable, no read) so that
+    # cooperative fcntl.lockf() works across multiple user contexts on
+    # bare-metal deployments. the umask is cleared so the requested mode is
+    # not masked away (see https://stackoverflow.com/a/15015748/832230).
+    # phase g may tighten this to 0o600 once the deployment model is
+    # finalized; phase a preserves upstream behavior. (suppresses python:S2612.)
+    umask_original = os.umask(0)  # NOSONAR
 
     try:
         lf_fd = os.open(lf_path, lf_flags, lf_mode)
@@ -1540,319 +1111,3 @@ def lock(destination: str) -> int:
 def unlock(lf_fd: int) -> None:
     """unlocks the lock file; does not remove because another process may lock it in the meantime"""
     fcntl.lockf(lf_fd, fcntl.LOCK_UN)
-
-
-def parse_args() -> argparse.Namespace:
-    """parses the command-line arguments"""
-    arg_parser = argparse.ArgumentParser(
-        description="Synchronizes BlackVue dashcam recordings with a local directory.",
-        epilog="Bug reports: https://github.com/tekgnosis-net/blackvuesync/issues",
-    )
-    arg_parser.add_argument(
-        "address", metavar="ADDRESS", help="dashcam IP address or name"
-    )
-    arg_parser.add_argument(
-        "-d",
-        "--destination",
-        metavar="DEST",
-        help="sets the destination directory to DEST; defaults to the current directory",
-    )
-    arg_parser.add_argument(
-        "-g",
-        "--grouping",
-        metavar="GROUPING",
-        default="none",
-        choices=["none", "daily", "weekly", "monthly", "yearly"],
-        help="groups recording by day, week, month or year under a directory named after the date; so respectively 2019-06-15, 2019-06-09 (Mon), 2019-07 or 2019; defaults to none, indicating no grouping",
-    )
-    arg_parser.add_argument(
-        "-k",
-        "--keep",
-        metavar="KEEP_RANGE",
-        help="""keeps recordings in the given range, removing the rest; defaults to days, but can suffix with d, w for days or weeks respectively""",
-    )
-    arg_parser.add_argument(
-        "-p",
-        "--priority",
-        metavar="DOWNLOAD_PRIORITY",
-        default="date",
-        choices=["date", "rdate", "type"],
-        help="sets the recording download priority; date: downloads in chronological order from oldest to newest; rdate: downloads in chronological order from newest to oldest; type: prioritizes manual, event, normal and then parkingrecordings; defaults to date",
-    )
-    arg_parser.add_argument(
-        "-i",
-        "--include",
-        default=None,
-        type=parse_filter,
-        help="downloads only recordings matching the given codes; each code"
-        " is a recording type optionally followed by a camera direction;"
-        " e.g. --include P,NF downloads all Parking and Normal Front"
-        " recordings",
-    )
-    arg_parser.add_argument(
-        "-e",
-        "--exclude",
-        default=None,
-        type=parse_filter,
-        help="excludes recordings matching the given codes; takes priority"
-        " over --include; e.g. --include N,E --exclude NR downloads all"
-        " Normal and Event recordings except Normal Rear",
-    )
-    arg_parser.add_argument(
-        "-u",
-        "--max-used-disk",
-        metavar="DISK_USAGE_PERCENT",
-        default=90,
-        type=int,
-        choices=range(5, 99),
-        help="stops downloading recordings if disk is over DISK_USAGE_PERCENT used; defaults to 90",
-    )
-    arg_parser.add_argument(
-        "-t",
-        "--timeout",
-        metavar="TIMEOUT",
-        default=10.0,
-        type=float,
-        help="sets the connection timeout in seconds (float); defaults to 10.0 seconds",
-    )
-    arg_parser.add_argument(
-        "--retry-failed-after",
-        metavar="DURATION",
-        default="1d",
-        help="waits at least the given duration before retrying a failed download; defaults to days, but can suffix with s, h, d, w for seconds, hours, days or weeks respectively; defaults to 1d",
-    )
-    arg_parser.add_argument(
-        "--skip-metadata",
-        metavar="TYPES",
-        default=set(),
-        type=parse_skip_metadata,
-        help="skips downloading metadata file types; t=thumbnail (.thm),"
-        " 3=accelerometer (.3gf), g=gps (.gps); e.g. --skip-metadata t3g"
-        " skips all metadata files",
-    )
-    arg_parser.add_argument(
-        "-v", "--verbose", action="count", default=0, help="increases verbosity"
-    )
-    arg_parser.add_argument(
-        "-q",
-        "--quiet",
-        action="store_true",
-        help="quiets down output messages; overrides verbosity options",
-    )
-    arg_parser.add_argument(
-        "--log-format",
-        default="text",
-        choices=LOG_FORMATS,
-        help="sets log output format; defaults to text",
-    )
-    arg_parser.add_argument(
-        "--metrics-file",
-        metavar="PATH",
-        help="writes Prometheus metrics text format to PATH",
-    )
-    arg_parser.add_argument(
-        "--metrics-pushgateway-url",
-        metavar="URL",
-        type=parse_pushgateway_url,
-        help="pushes Prometheus metrics to the Pushgateway URL",
-    )
-    arg_parser.add_argument(
-        "--metrics-job",
-        metavar="NAME",
-        default=METRICS_DEFAULT_JOB,
-        help=f"sets the Pushgateway metrics job; defaults to {METRICS_DEFAULT_JOB}",
-    )
-    arg_parser.add_argument(
-        "--metrics-instance",
-        metavar="NAME",
-        help="sets the Pushgateway metrics instance; defaults to ADDRESS",
-    )
-    arg_parser.add_argument(
-        "--metrics-state-file",
-        metavar="PATH",
-        help="persists cross-run metrics state at PATH",
-    )
-    arg_parser.add_argument(
-        "--cron",
-        action="store_true",
-        help="cron mode, only logs normal recordings at default verbosity",
-    )
-    arg_parser.add_argument(
-        "--dry-run", action="store_true", help="shows what the program would do"
-    )
-    arg_parser.add_argument(
-        "--affinity-key",
-        metavar="AFFINITY_KEY",
-        help="affinity key; reserved for test isolation",
-    )
-    arg_parser.add_argument(
-        "--version",
-        action="version",
-        default=__version__,
-        version=f"%(prog)s {__version__}",
-        help="shows the version and exits",
-    )
-
-    return arg_parser.parse_args()
-
-
-def main() -> int:
-    """run forrest run"""
-    # dry-run is a global setting
-    # pylint: disable=global-statement,too-many-branches,too-many-statements
-    global dry_run
-    global max_disk_used_percent
-    global cutoff_date
-    global socket_timeout
-    global affinity_key
-    global retry_failed_after
-    global skip_metadata
-
-    args = parse_args()
-
-    configure_logging(args.log_format)
-    set_logging_levels(-1 if args.quiet else args.verbose, args.cron)
-
-    dry_run = args.dry_run
-    affinity_key = args.affinity_key
-    skip_metadata = args.skip_metadata
-    if skip_metadata:
-        logger.info(
-            "Skipping metadata types : %s",
-            ", ".join(sorted(skip_metadata)),
-            extra={
-                "event": "skip_metadata_configured",
-                "metadata_types": sorted(skip_metadata),
-            },
-        )
-    if dry_run:
-        logger.info(
-            "DRY RUN No action will be taken.",
-            extra={"event": "dry_run_enabled"},
-        )
-
-    max_disk_used_percent = args.max_used_disk
-
-    # sets socket timeout
-    socket_timeout = args.timeout
-    if socket_timeout <= 0:
-        raise argparse.ArgumentTypeError("TIMEOUT must be greater than zero.")
-    socket.setdefaulttimeout(socket_timeout)
-
-    destination = args.destination or os.getcwd()
-    grouping = args.grouping
-    lf_fd = None
-    exit_code = 0
-    sync_success = False
-    metrics = None
-    metrics_state_file = None
-
-    if metrics_enabled(args):
-        metrics_state_file = args.metrics_state_file or default_metrics_state_file(
-            destination
-        )
-        metrics = SyncMetrics(
-            run_start_monotonic=time.perf_counter(),
-            run_start_timestamp=time.time(),
-            metrics_job=args.metrics_job,
-            metrics_instance=args.metrics_instance or args.address,
-        )
-        metrics.last_successful_file_pull_timestamp_seconds = load_metrics_state(
-            metrics_state_file
-        )
-
-    try:
-        if args.keep:
-            cutoff_date = calc_cutoff_date(args.keep)
-            logger.info(
-                "Recording cutoff date : %s",
-                cutoff_date,
-                extra={
-                    "event": "recording_cutoff_configured",
-                    "cutoff_date": cutoff_date,
-                },
-            )
-
-        retry_failed_after = parse_duration(
-            args.retry_failed_after, label="RETRY_FAILED_AFTER"
-        )
-
-        # prepares the local file destination
-        ensure_destination(destination)
-
-        lf_fd = lock(destination)
-
-        try:
-            sync(
-                args.address,
-                destination,
-                grouping,
-                args.priority,
-                args.include,
-                args.exclude,
-                metrics,
-            )
-            sync_success = True
-        finally:
-            # removes temporary files (if we synced successfully, these are temp files from lost recordings)
-            clean_destination(destination, grouping)
-    except UserWarning as e:
-        logger.warning(
-            e.args[0],
-            extra={
-                "event": "sync_warning",
-                "error_type": type(e).__name__,
-                "error": str(e),
-            },
-        )
-        if metrics:
-            metrics.record_run_failure(classify_run_failure(e))
-        exit_code = 0 if args.cron else 1
-    except RuntimeError as e:
-        logger.error(
-            e.args[0],
-            extra={
-                "event": "sync_error",
-                "error_type": type(e).__name__,
-                "error": str(e),
-            },
-        )
-        if metrics:
-            metrics.record_run_failure(classify_run_failure(e))
-        exit_code = 2
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        logger.exception(
-            e,
-            extra={
-                "event": "sync_unexpected_error",
-                "error_type": type(e).__name__,
-                "error": str(e),
-            },
-        )
-        if metrics:
-            metrics.record_run_failure(classify_run_failure(e))
-        exit_code = 3
-    finally:
-        if lf_fd is not None:
-            unlock(lf_fd)
-
-        if metrics:
-            with contextlib.suppress(OSError):
-                metrics.failed_marker_files = count_failed_marker_files(destination)
-            metrics.finalize(exit_code, sync_success)
-            if metrics_state_file:
-                save_metrics_state(metrics_state_file, metrics)
-            emit_metrics(
-                metrics,
-                args.metrics_file,
-                args.metrics_pushgateway_url,
-                socket_timeout,
-            )
-
-        flush_logs()
-
-    return exit_code
-
-
-if __name__ == "__main__":
-    sys.exit(main())

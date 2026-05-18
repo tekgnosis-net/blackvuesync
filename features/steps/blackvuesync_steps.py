@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import os
 import subprocess
-from pathlib import Path
 
 from behave import when
 from behave.runner import Context
@@ -98,10 +97,6 @@ def _execute_direct(
     skip_metadata: str | None = None,
 ) -> None:
     """executes blackvuesync directly via python."""
-    # locates blackvuesync.py
-    project_root = Path(__file__).parent.parent.parent
-    blackvuesync_script = project_root / "blackvuesync.py"
-
     # checks if coverage collection is enabled
     collect_coverage = context.config.userdata.getbool("collect_coverage", False)
 
@@ -112,7 +107,8 @@ def _execute_direct(
             "run",
             "--parallel-mode",
             "--source=.",
-            str(blackvuesync_script),
+            "-m",
+            "blackvuesync",
             address,
             "-d",
             destination,
@@ -122,7 +118,8 @@ def _execute_direct(
     else:
         cmd = [
             "python3",
-            str(blackvuesync_script),
+            "-m",
+            "blackvuesync",
             address,
             "-d",
             destination,
