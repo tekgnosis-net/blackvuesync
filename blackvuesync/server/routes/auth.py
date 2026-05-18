@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import time
+from urllib.parse import urlparse
 
 from flask import (
     Blueprint,
@@ -17,11 +18,11 @@ from flask import (
 from werkzeug.wrappers import Response
 
 from blackvuesync.server.auth import (
-    _clear_failures,
-    _is_locked_out,
-    _record_failure,
+    clear_login_failures,
     hash_password,
+    is_login_locked_out,
     login_required,
+    record_login_failure,
     verify_password,
 )
 
@@ -69,7 +70,7 @@ def login_post() -> tuple[str, int] | Response:
     auth = settings.auth
     ip = request.remote_addr or "unknown"
 
-    if _is_locked_out(ip):
+    if is_login_locked_out(ip):
         _pad_response_time(start)
         return (
             render_template(
@@ -91,11 +92,11 @@ def login_post() -> tuple[str, int] | Response:
     password_ok = verify_password(stored_hash, password)
 
     if not (username_ok and password_ok):
-        _record_failure(ip)
+        record_login_failure(ip)
         _pad_response_time(start)
         return render_template("login.html", error="invalid username or password"), 401
 
-    _clear_failures(ip)
+    clear_login_failures(ip)
     session.clear()
     session["user"] = auth.username
     session.permanent = True
@@ -105,9 +106,11 @@ def login_post() -> tuple[str, int] | Response:
         or request.form.get("next")
         or url_for("ui_bp.dashboard")
     )
-    # prevent open-redirect: only allow relative paths
-    if not next_url.startswith("/"):
-        next_url = url_for("ui_bp.dashboard")
+    # prevent open-redirect: reject any url with a scheme or netloc (e.g.
+    # //evil.com, http://evil.com, javascript:...) and any non-path value.
+    _parsed = urlparse(next_url)
+    if _parsed.scheme or _parsed.netloc or not next_url.startswith("/"):
+        next_url = "/"
 
     return redirect(next_url)
 

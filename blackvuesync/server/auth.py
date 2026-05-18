@@ -9,7 +9,7 @@ from collections import deque
 from typing import Any, Callable
 
 from argon2 import PasswordHasher
-from argon2.exceptions import VerifyMismatchError
+from argon2.exceptions import InvalidHashError, VerificationError
 from flask import (
     current_app,
     g,
@@ -36,6 +36,8 @@ _LOCKOUT_SECONDS = 900
 
 # maps ip -> deque of monotonic failure timestamps
 _failure_timestamps: dict[str, deque[float]] = {}
+# maps ip -> monotonic timestamp when the lockout expires
+_locked_until: dict[str, float] = {}
 _rate_limit_lock = threading.Lock()
 
 
@@ -50,7 +52,7 @@ def verify_password(stored_hash: str, plaintext: str) -> bool:
     try:
         result: bool = _HASHER.verify(stored_hash, plaintext)
         return result
-    except VerifyMismatchError:
+    except (VerificationError, InvalidHashError):
         return False
 
 
@@ -65,32 +67,46 @@ def needs_rehash(stored_hash: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def _is_locked_out(ip: str) -> bool:
-    """returns True if ip has too many recent failures."""
+def is_login_locked_out(ip: str) -> bool:
+    """returns True if ip is currently locked out."""
     with _rate_limit_lock:
         now = time.monotonic()
+        # check explicit lockout-until timestamp first
+        until = _locked_until.get(ip, 0.0)
+        if now < until:
+            return True
+        # prune expired lockout entries to bound memory
+        if ip in _locked_until and _locked_until[ip] <= now:
+            del _locked_until[ip]
+        # also check sliding window in case a lockout was never set
         window_start = now - _FAILURE_WINDOW_SECONDS
         dq = _failure_timestamps.get(ip)
         if dq is None:
             return False
-        # drop stale entries
         while dq and dq[0] < window_start:
             dq.popleft()
         return len(dq) >= _FAILURE_THRESHOLD
 
 
-def _record_failure(ip: str) -> None:
-    """records a failed login attempt for ip."""
+def record_login_failure(ip: str) -> None:
+    """records a failed login attempt for ip; sets a lockout if threshold is reached."""
     with _rate_limit_lock:
+        now = time.monotonic()
         if ip not in _failure_timestamps:
             _failure_timestamps[ip] = deque()
-        _failure_timestamps[ip].append(time.monotonic())
+        _failure_timestamps[ip].append(now)
+        # count failures within the current window
+        window_start = now - _FAILURE_WINDOW_SECONDS
+        recent = sum(1 for t in _failure_timestamps[ip] if t >= window_start)
+        if recent >= _FAILURE_THRESHOLD:
+            _locked_until[ip] = now + _LOCKOUT_SECONDS
 
 
-def _clear_failures(ip: str) -> None:
-    """clears all recorded failures for ip (called on successful login)."""
+def clear_login_failures(ip: str) -> None:
+    """clears all recorded failures and any lockout for ip (called on successful login)."""
     with _rate_limit_lock:
         _failure_timestamps.pop(ip, None)
+        _locked_until.pop(ip, None)
 
 
 # ---------------------------------------------------------------------------

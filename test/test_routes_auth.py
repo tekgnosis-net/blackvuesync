@@ -12,7 +12,7 @@ import pytest
 from flask import Flask
 
 from blackvuesync.server import create_app
-from blackvuesync.server.auth import _failure_timestamps, hash_password
+from blackvuesync.server.auth import _failure_timestamps, _locked_until, hash_password
 from blackvuesync.settings import SettingsStore
 
 # ---------------------------------------------------------------------------
@@ -57,6 +57,7 @@ def app_with_password(settings_path: Path) -> Flask:
 def clear_rate_limit_state() -> None:
     """clears in-memory rate-limit state before each test."""
     _failure_timestamps.clear()
+    _locked_until.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -270,6 +271,63 @@ def test_get_root_after_logout_redirects_to_login(app_with_password: Flask) -> N
     assert r.status_code == 302
     location = r.headers["Location"]
     assert "/login" in location or "/first-run" in location
+
+
+# ---------------------------------------------------------------------------
+# open-redirect validation for ?next= parameter
+# ---------------------------------------------------------------------------
+
+
+def test_post_login_next_protocol_relative_redirects_to_root(
+    app_with_password: Flask,
+) -> None:
+    """verifies //evil.com is rejected: redirect goes to / not the attacker site."""
+    with app_with_password.test_client() as c:
+        r = c.post(
+            "/login?next=//evil.com",
+            data={"username": "admin", "password": "correct-password-123"},
+        )
+    assert r.status_code == 302
+    assert r.headers["Location"] == "/"
+
+
+def test_post_login_next_absolute_http_redirects_to_root(
+    app_with_password: Flask,
+) -> None:
+    """verifies http://evil.com is rejected: redirect goes to /."""
+    with app_with_password.test_client() as c:
+        r = c.post(
+            "/login?next=http://evil.com",
+            data={"username": "admin", "password": "correct-password-123"},
+        )
+    assert r.status_code == 302
+    assert r.headers["Location"] == "/"
+
+
+def test_post_login_next_javascript_scheme_redirects_to_root(
+    app_with_password: Flask,
+) -> None:
+    """verifies javascript:alert(1) is rejected: redirect goes to /."""
+    with app_with_password.test_client() as c:
+        r = c.post(
+            "/login?next=javascript:alert(1)",
+            data={"username": "admin", "password": "correct-password-123"},
+        )
+    assert r.status_code == 302
+    assert r.headers["Location"] == "/"
+
+
+def test_post_login_next_legit_path_is_honored(
+    app_with_password: Flask,
+) -> None:
+    """verifies a relative path like /settings is honored after login."""
+    with app_with_password.test_client() as c:
+        r = c.post(
+            "/login?next=/settings",
+            data={"username": "admin", "password": "correct-password-123"},
+        )
+    assert r.status_code == 302
+    assert r.headers["Location"] == "/settings"
 
 
 # ---------------------------------------------------------------------------

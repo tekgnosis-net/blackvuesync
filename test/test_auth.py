@@ -14,12 +14,13 @@ from flask.testing import FlaskClient
 
 from blackvuesync.server import create_app
 from blackvuesync.server.auth import (
-    _clear_failures,
     _failure_timestamps,
-    _is_locked_out,
-    _record_failure,
+    _locked_until,
+    clear_login_failures,
     hash_password,
+    is_login_locked_out,
     needs_rehash,
+    record_login_failure,
     verify_password,
 )
 from blackvuesync.settings import SettingsStore
@@ -62,8 +63,10 @@ def client(app: Flask) -> FlaskClient:
 def clear_rate_limit_state() -> Generator[None, None, None]:
     """clears in-memory rate-limit state before and after each test."""
     _failure_timestamps.clear()
+    _locked_until.clear()
     yield
     _failure_timestamps.clear()
+    _locked_until.clear()
 
 
 # ---------------------------------------------------------------------------
@@ -98,6 +101,11 @@ def test_needs_rehash_false_for_fresh_hash() -> None:
     assert needs_rehash(h) is False
 
 
+def test_verify_password_invalid_hash_returns_false() -> None:
+    """verifies verify_password returns False (not raising) for a corrupted hash."""
+    assert verify_password("not-a-valid-argon2-hash", "any-password") is False
+
+
 # ---------------------------------------------------------------------------
 # rate-limit helpers
 # ---------------------------------------------------------------------------
@@ -105,33 +113,33 @@ def test_needs_rehash_false_for_fresh_hash() -> None:
 
 def test_is_locked_out_false_initially() -> None:
     """verifies an ip with no failures is not locked out."""
-    assert _is_locked_out("10.0.0.1") is False
+    assert is_login_locked_out("10.0.0.1") is False
 
 
 def test_nine_failures_do_not_lock() -> None:
     """verifies 9 failures (below threshold) do not trigger a lockout."""
     ip = "10.0.0.2"
     for _ in range(9):
-        _record_failure(ip)
-    assert _is_locked_out(ip) is False
+        record_login_failure(ip)
+    assert is_login_locked_out(ip) is False
 
 
 def test_ten_failures_lock_out() -> None:
     """verifies 10 failures (at threshold) lock out the ip."""
     ip = "10.0.0.3"
     for _ in range(10):
-        _record_failure(ip)
-    assert _is_locked_out(ip) is True
+        record_login_failure(ip)
+    assert is_login_locked_out(ip) is True
 
 
 def test_clear_failures_removes_lockout() -> None:
-    """verifies _clear_failures removes a lockout."""
+    """verifies clear_login_failures removes a lockout."""
     ip = "10.0.0.4"
     for _ in range(11):
-        _record_failure(ip)
-    assert _is_locked_out(ip) is True
-    _clear_failures(ip)
-    assert _is_locked_out(ip) is False
+        record_login_failure(ip)
+    assert is_login_locked_out(ip) is True
+    clear_login_failures(ip)
+    assert is_login_locked_out(ip) is False
 
 
 def test_old_failures_expire_after_window() -> None:
@@ -142,12 +150,66 @@ def test_old_failures_expire_after_window() -> None:
     with patch("blackvuesync.server.auth.time") as mock_time:
         mock_time.monotonic.return_value = base_time
         for _ in range(11):
-            _record_failure(ip)
+            record_login_failure(ip)
 
-    # advance time past the window (600s)
+    # advance time past the window (600s) and past the lockout (900s)
     with patch("blackvuesync.server.auth.time") as mock_time:
-        mock_time.monotonic.return_value = base_time + 700
-        assert _is_locked_out(ip) is False
+        mock_time.monotonic.return_value = base_time + 1000
+        assert is_login_locked_out(ip) is False
+
+
+# ---------------------------------------------------------------------------
+# lockout duration semantics (spec: D=15min after N=10 failures in T=10min)
+# ---------------------------------------------------------------------------
+
+
+def test_lockout_persists_within_duration() -> None:
+    """verifies the ip remains locked for the full lockout duration after threshold."""
+    ip = "10.1.0.1"
+    base_time = 5000.0
+    # record 10 failures to trigger lockout
+    with patch("blackvuesync.server.auth.time") as mock_time:
+        mock_time.monotonic.return_value = base_time
+        for _ in range(10):
+            record_login_failure(ip)
+        assert is_login_locked_out(ip) is True
+
+    # 14 minutes later (840s < 900s lockout) -- still locked
+    with patch("blackvuesync.server.auth.time") as mock_time:
+        mock_time.monotonic.return_value = base_time + 840
+        assert is_login_locked_out(ip) is True
+
+
+def test_lockout_expires_after_duration() -> None:
+    """verifies the lockout expires after the lockout duration (900s)."""
+    ip = "10.1.0.2"
+    base_time = 5000.0
+    with patch("blackvuesync.server.auth.time") as mock_time:
+        mock_time.monotonic.return_value = base_time
+        for _ in range(10):
+            record_login_failure(ip)
+
+    # 16 minutes later (960s > 900s lockout) -- no longer locked
+    with patch("blackvuesync.server.auth.time") as mock_time:
+        mock_time.monotonic.return_value = base_time + 960
+        assert is_login_locked_out(ip) is False
+
+
+def test_eleventh_failure_does_not_reset_lockout_start() -> None:
+    """verifies a lockout set at N=10 is still respected after an 11th failure."""
+    ip = "10.1.0.3"
+    base_time = 5000.0
+    with patch("blackvuesync.server.auth.time") as mock_time:
+        mock_time.monotonic.return_value = base_time
+        for _ in range(11):
+            record_login_failure(ip)
+
+    # just past the first lockout window (900s): if the 11th failure extended
+    # it we might still be locked; the implementation records lockout at the
+    # 10th failure so 960s from base should be clear.
+    with patch("blackvuesync.server.auth.time") as mock_time:
+        mock_time.monotonic.return_value = base_time + 960
+        assert is_login_locked_out(ip) is False
 
 
 # ---------------------------------------------------------------------------
