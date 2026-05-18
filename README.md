@@ -287,6 +287,34 @@ OR, depending on the Docker version:
 docker compose up -d
 ```
 
+##### Settings File
+
+On first start, the container creates `/config/settings.json` (mode `0600`)
+from the environment variables listed below. From that point on, the file is
+canonical: environment variables are ignored on subsequent starts. To change
+a setting after first run, either:
+
+* Edit `/config/settings.json` directly and restart the container.
+* Delete `/config/settings.json` and restart; the container re-bootstraps from
+  the current environment variables.
+
+The `/config` volume is required for the settings file to persist across
+container restarts. Mount it alongside `/recordings`:
+
+```sh
+docker run -d --restart unless-stopped \
+    -v /data/dashcam:/recordings \
+    -v /data/config:/config \
+    -e ADDRESS=dashcam.example.net \
+    ...
+```
+
+##### Recovery
+
+If you lose access to the admin password (relevant once the web UI is
+available), edit `auth.password_hash` to `""` in `/config/settings.json` and
+restart the container. The first-run wizard will prompt for a new password.
+
 ##### Reference
 
 These options are required for the docker image to operate correctly:

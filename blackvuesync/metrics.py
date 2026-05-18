@@ -8,14 +8,11 @@ import glob
 import json
 import logging
 import os
-import socket
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-
-import blackvuesync.sync as _sync
 
 METRICS_DEFAULT_JOB = "blackvuesync"
 METRICS_DEFAULT_STATE_FILENAME = ".blackvuesync.metrics-state.json"
@@ -51,6 +48,7 @@ class SyncMetrics:  # pylint: disable=too-many-instance-attributes
 
     run_start_monotonic: float
     run_start_timestamp: float
+    dry_run: bool = False
     metrics_job: str = METRICS_DEFAULT_JOB
     metrics_instance: str = ""
     last_successful_file_pull_timestamp_seconds: float | None = None
@@ -81,7 +79,7 @@ class SyncMetrics:  # pylint: disable=too-many-instance-attributes
         self.files_downloaded_last_run += 1
         if content_length_bytes is not None:
             self.bytes_downloaded_last_run += content_length_bytes
-        if not _sync.dry_run:
+        if not self.dry_run:
             self.last_successful_file_pull_timestamp_seconds = time.time()
 
     def record_file_download_failure(self, reason: str) -> None:
@@ -407,7 +405,7 @@ def push_metrics(
     try:
         with urllib.request.urlopen(request, timeout=timeout):
             pass
-    except (urllib.error.URLError, TimeoutError, socket.timeout, OSError) as e:
+    except OSError as e:
         cron_logger.warning(
             "Could not push metrics to Pushgateway : %s; error : %s; ignoring.",
             url,

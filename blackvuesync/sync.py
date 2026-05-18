@@ -1072,10 +1072,10 @@ def lock(destination: str) -> int:
     """creates a lock to ensure only one instance is running on a given destination; adapted from:
     https://stackoverflow.com/questions/220525/ensure-a-single-instance-of-an-application-in-linux
     """
-    # Establish lock file settings
+    # establish lock file settings
     lf_path = os.path.join(destination, ".blackvuesync.lock")
     lf_flags = os.O_WRONLY | os.O_CREAT
-    lf_mode = stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH  # This is 0o222, i.e. 146
+    lf_mode = stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH  # this is 0o222, i.e. 146
 
     # creates the lock file with mode 0o222 (world-writable, no read) so that
     # cooperative fcntl.lockf() works across multiple user contexts on

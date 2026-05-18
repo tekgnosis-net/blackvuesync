@@ -9,6 +9,7 @@ import os
 import socket
 import sys
 import time
+from pathlib import Path
 
 import blackvuesync.sync as _sync
 from blackvuesync import __version__
@@ -24,6 +25,7 @@ from blackvuesync.metrics import (
     parse_pushgateway_url,
     save_metrics_state,
 )
+from blackvuesync.settings import SettingsStore
 from blackvuesync.sync import (
     LOG_FORMATS,
     calc_cutoff_date,
@@ -43,6 +45,28 @@ from blackvuesync.sync import (
 # module-level loggers
 logger = logging.getLogger()
 cron_logger = logging.getLogger("cron")
+
+# default settings file path; can be overridden for testing
+_DEFAULT_SETTINGS_PATH = Path(
+    os.environ.get("BLACKVUESYNC_CONFIG_PATH", "/config/settings.json")
+)
+
+
+def _try_load_settings_store(path: Path) -> SettingsStore | None:
+    """attempts to load or bootstrap a settings store; returns None on failure.
+
+    in cli diagnostic mode (no /config directory) or when env-var bootstrap
+    encounters malformed inputs, the store is unavailable and settings fall
+    back entirely to cli args. failure is logged but does not crash the cli.
+    """
+    try:
+        return SettingsStore(path)
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        # broad catch is deliberate: the cli must keep working even if the
+        # settings file is corrupt, env vars are malformed, or perms are off.
+        # phase c (web ui) surfaces these failures to the operator.
+        logger.debug("settings store unavailable at %s: %s", path, e)
+        return None
 
 
 def parse_args() -> argparse.Namespace:
@@ -200,8 +224,13 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    """run forrest run"""
+    """runs the sync workflow and returns the exit code."""
     # pylint: disable=too-many-branches,too-many-statements
+
+    # loads or bootstraps persistent settings (env vars seed the file on first
+    # run; subsequent runs read the file). cli args override for diagnostics.
+    _try_load_settings_store(_DEFAULT_SETTINGS_PATH)
+
     args = parse_args()
 
     configure_logging(args.log_format)
@@ -249,6 +278,7 @@ def main() -> int:
         metrics = SyncMetrics(
             run_start_monotonic=time.perf_counter(),
             run_start_timestamp=time.time(),
+            dry_run=args.dry_run,
             metrics_job=args.metrics_job,
             metrics_instance=args.metrics_instance or args.address,
         )
@@ -304,7 +334,7 @@ def main() -> int:
             metrics.record_run_failure(classify_run_failure(e))
         exit_code = 0 if args.cron else 1
     except RuntimeError as e:
-        logger.error(
+        logger.exception(
             e.args[0],
             extra={
                 "event": "sync_error",

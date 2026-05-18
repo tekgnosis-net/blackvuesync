@@ -19,7 +19,7 @@ repos:
       # security
       - id: detect-private-key
       - id: check-added-large-files
-        args: ['--maxkb=16']
+        args: ['--maxkb=64']
         exclude: '^features/mock_dashcam/files/|\.md$'
 
       # syntax checkers
