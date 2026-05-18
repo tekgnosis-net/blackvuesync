@@ -54,10 +54,16 @@ def progress_stream() -> Response:
     pub = _publisher()
 
     def _sse_events() -> Iterator[bytes]:
+        last_event_monotonic: float = -1.0
         for snap in pub.subscribe():
-            snap_dict = _snap_to_dict(snap)
-            payload = json.dumps(snap_dict, default=str)
-            yield f"event: progress\ndata: {payload}\n\n".encode()
+            if snap.last_event_monotonic == last_event_monotonic:
+                # same snapshot repeated -- no new events; emit keepalive comment
+                yield b": keepalive\n\n"
+            else:
+                last_event_monotonic = snap.last_event_monotonic
+                snap_dict = _snap_to_dict(snap)
+                payload = json.dumps(snap_dict, default=str)
+                yield f"event: progress\ndata: {payload}\n\n".encode()
 
     resp = Response(stream_with_context(_sse_events()), mimetype="text/event-stream")
     resp.headers["Cache-Control"] = "no-store"

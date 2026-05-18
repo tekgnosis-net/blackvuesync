@@ -260,6 +260,41 @@ class TestProgressStream:
             assert resp.headers.get("Cache-Control") == "no-store"
             assert resp.headers.get("X-Accel-Buffering") == "no"
 
+    def test_sse_heartbeat_emits_keepalive_comment(self, app_and_pub: Any) -> None:
+        """when subscribe() yields the same snapshot twice, the SSE handler
+        emits a keepalive comment (': keepalive') instead of a data frame."""
+        app, pub = app_and_pub
+        idle_snap = pub.snapshot()
+
+        def _fake_subscribe() -> Any:
+            # first yield: real state change (initial snapshot)
+            yield idle_snap
+            # second yield: same monotonic -- simulates 30-second heartbeat timeout
+            yield idle_snap
+
+        with app.test_client() as client:
+            client.post(
+                "/login",
+                data={"username": "admin", "password": "test-password-1234"},
+                follow_redirects=True,
+            )
+            with patch.object(pub, "subscribe", side_effect=_fake_subscribe):
+                collected: list[bytes] = []
+                with client.get(
+                    "/api/sync/progress/stream",
+                    buffered=False,
+                ) as resp:
+                    assert resp.status_code == 200
+                    for chunk in resp.response:
+                        if chunk:
+                            collected.append(chunk)
+
+        combined = b"".join(collected)
+        # the first yield should produce an event frame
+        assert b"event: progress" in combined
+        # the second yield (same snapshot) should produce a keepalive comment
+        assert b": keepalive" in combined
+
     def test_sse_redirects_when_not_authenticated(self, settings_path: Path) -> None:
         app, _ = _make_app(settings_path)
         with app.test_client() as client:
