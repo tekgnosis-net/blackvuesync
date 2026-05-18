@@ -71,9 +71,43 @@ Code formatting is handled automatically by pre-commit hooks (Black for Python, 
 
 ## Architecture
 
-### Single-File Design
+### Package Design
 
-The entire application is contained in `blackvuesync.py` - a self-contained script with no external dependencies. This design prioritizes portability and ease of deployment.
+The application is a Python package under `blackvuesync/`. Core modules:
+
+- `sync.py` -- filename regex, dashcam HTTP client, download/resume, retention,
+  locking. The primary sync logic; kept self-contained for portability.
+- `metrics.py` -- `SyncMetrics` dataclass and Prometheus text emission.
+- `settings.py` -- `Settings` frozen-dataclass tree, `SettingsStore` with atomic
+  JSON persistence, per-section validators, env-var bootstrap, and schema
+  migration. See "Settings" section below.
+- `__main__.py` -- CLI entry point; wires together the above at startup.
+
+### Settings
+
+`SettingsStore` persists configuration to `/config/settings.json` (override via
+`BLACKVUESYNC_CONFIG_PATH` env var). Env vars are **seed-only**: they populate
+the file on first run; subsequent runs read the file and ignore env vars. The
+file has `0600` permissions and `SettingsStore` refuses to load if the mode is
+wider than that.
+
+Settings are organized into nine frozen-dataclass sections:
+
+| Section | TIER | Key fields |
+| --- | --- | --- |
+| connection | restart | address, timeout_seconds |
+| schedule | next_tick | cron_expression, timezone |
+| sync | next_tick | priority, grouping, include, exclude, retry_failed_after, skip_metadata |
+| retention | next_tick | keep, max_used_disk_percent |
+| logging | immediate | verbose, quiet, format |
+| metrics | immediate | file, pushgateway_url, state_file |
+| web | restart | port, session_lifetime_hours |
+| auth | immediate | mode, username, password_hash, session_secret, trusted_proxies |
+| system | restart | destination, dry_run |
+
+`TIER` (`immediate` / `next_tick` / `restart`) indicates how quickly a change
+propagates once the web UI exists. All mutations go through `SettingsStore.update()`
+which validates, saves atomically, and fires change-listener callbacks.
 
 ### Core Flow
 
