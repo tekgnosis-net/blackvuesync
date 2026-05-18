@@ -40,7 +40,7 @@ jobs:
 
       - name: Run unit tests with coverage
         run: |
-          COVERAGE_FILE=.coverage.pytest pytest test/blackvuesync_test.py --cov=. --cov-report= -v
+          COVERAGE_FILE=.coverage.pytest pytest test/ --cov=. --cov-report= -v
 
       - name: Run integration tests with coverage
         run: |

@@ -39,7 +39,7 @@ jobs:
 
       - name: Run unit tests
         run: |
-          pytest test/blackvuesync_test.py -v
+          pytest test/ -v
 
   integration-tests:
     runs-on: ubuntu-latest
