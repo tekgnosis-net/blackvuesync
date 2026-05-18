@@ -269,8 +269,10 @@ blackvuesync.example.net {
 }
 ```
 
-Add `HTTPS_PROXY=1` to the container environment so Flask sees the correct
-scheme and issues HSTS headers.
+Set `BLACKVUESYNC_TRUST_PROXY=1` in the container environment (or process
+environment) when deploying behind an HTTPS reverse proxy. This enables
+`SESSION_COOKIE_SECURE` so the session cookie is only transmitted over HTTPS
+connections. Leave it unset for local HTTP development.
 
 ##### Recovery
 

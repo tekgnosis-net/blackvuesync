@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import os
 from datetime import timedelta
-from typing import Any
 
 from flask import Flask, Response, request
 from flask_wtf.csrf import CSRFProtect
@@ -27,12 +27,21 @@ def create_app(
     settings = settings_store.get()
     secret = settings.auth.session_secret or "dev-insecure-placeholder"
 
+    # when deployed behind an https reverse proxy, set BLACKVUESYNC_TRUST_PROXY=1
+    # so the session cookie is only sent over https connections.
+    trust_proxy = os.environ.get("BLACKVUESYNC_TRUST_PROXY", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
     app.config.update(
         TESTING=testing,
         SECRET_KEY=secret.encode() if isinstance(secret, str) else secret,
         SESSION_COOKIE_NAME="bvs_session",
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
+        SESSION_COOKIE_SECURE=trust_proxy,
         PERMANENT_SESSION_LIFETIME=timedelta(hours=settings.web.session_lifetime_hours),
         WTF_CSRF_HEADERS=["X-CSRFToken"],
         WTF_CSRF_ENABLED=not testing,
@@ -89,10 +98,3 @@ def create_app(
 
 
 __all__: list[str] = ["create_app"]
-
-
-def _store_attr_info() -> dict[str, Any]:
-    """documents dynamic attributes attached to Flask app instances at runtime."""
-    return {
-        "settings_store": "SettingsStore instance attached by create_app()",
-    }
