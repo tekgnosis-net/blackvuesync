@@ -483,6 +483,13 @@ class SettingsStore:
         """builds initial settings from environment variables on first run."""
         env = os.environ
 
+        # treats empty string as absent; mirrors blackvuesync.sh's
+        # [ -n "${X:-}" ] check so Dockerfile ENV defaults like X="" do not
+        # produce parse errors (e.g., int("") -> ValueError).
+        def _env(key: str, default: str) -> str:
+            val = env.get(key, "")
+            return val if val else default
+
         # warns about retired env vars
         if env.get("CRON"):
             logger.warning(
@@ -496,53 +503,53 @@ class SettingsStore:
             )
 
         connection = ConnectionSettings(
-            address=env.get("ADDRESS", ""),
-            timeout_seconds=float(env.get("TIMEOUT", "10.0")),
+            address=_env("ADDRESS", ""),
+            timeout_seconds=float(_env("TIMEOUT", "10.0")),
         )
 
         schedule = ScheduleSettings(
-            cron_expression=env.get("BLACKVUESYNC_SCHEDULE", "*/15 * * * *"),
-            timezone=env.get("BLACKVUESYNC_TIMEZONE", "UTC"),
+            cron_expression=_env("BLACKVUESYNC_SCHEDULE", "*/15 * * * *"),
+            timezone=_env("BLACKVUESYNC_TIMEZONE", "UTC"),
         )
 
-        raw_include = env.get("INCLUDE", "")
-        raw_exclude = env.get("EXCLUDE", "")
-        raw_skip_meta = env.get("SKIP_METADATA", "")
+        raw_include = _env("INCLUDE", "")
+        raw_exclude = _env("EXCLUDE", "")
+        raw_skip_meta = _env("SKIP_METADATA", "")
         sync = SyncSettings(
-            priority=env.get("PRIORITY", "date"),  # type: ignore[arg-type]
-            grouping=env.get("GROUPING", "none"),  # type: ignore[arg-type]
+            priority=_env("PRIORITY", "date"),  # type: ignore[arg-type]
+            grouping=_env("GROUPING", "none"),  # type: ignore[arg-type]
             include=tuple(raw_include.split(",")) if raw_include else (),
             exclude=tuple(raw_exclude.split(",")) if raw_exclude else (),
-            retry_failed_after=env.get("RETRY_FAILED_AFTER", "1d"),
+            retry_failed_after=_env("RETRY_FAILED_AFTER", "1d"),
             skip_metadata=tuple(raw_skip_meta) if raw_skip_meta else (),  # type: ignore[arg-type]
-            affinity_key=env.get("AFFINITY_KEY") or None,
+            affinity_key=_env("AFFINITY_KEY", "") or None,
         )
 
         retention = RetentionSettings(
-            keep=env.get("KEEP", "2w"),
-            max_used_disk_percent=int(env.get("MAX_USED_DISK", "90")),
+            keep=_env("KEEP", "2w"),
+            max_used_disk_percent=int(_env("MAX_USED_DISK", "90")),
         )
 
-        verbose_raw = env.get("VERBOSE", "0")
+        verbose_raw = _env("VERBOSE", "0")
         log_settings = LoggingSettings(
             verbose=int(verbose_raw) if verbose_raw.isdigit() else 0,
-            quiet=env.get("QUIET", "").lower() in ("1", "true", "yes"),
-            format=env.get("LOG_FORMAT", "text"),  # type: ignore[arg-type]
+            quiet=_env("QUIET", "").lower() in ("1", "true", "yes"),
+            format=_env("LOG_FORMAT", "text"),  # type: ignore[arg-type]
         )
 
         metrics = MetricsSettings(
-            file=env.get("METRICS_FILE") or None,
-            pushgateway_url=env.get("METRICS_PUSHGATEWAY_URL") or None,
-            job=env.get("METRICS_JOB", "blackvuesync"),
-            instance=env.get("METRICS_INSTANCE") or None,
-            state_file=env.get("METRICS_STATE_FILE", "/config/metrics-state.json"),
+            file=_env("METRICS_FILE", "") or None,
+            pushgateway_url=_env("METRICS_PUSHGATEWAY_URL", "") or None,
+            job=_env("METRICS_JOB", "blackvuesync"),
+            instance=_env("METRICS_INSTANCE", "") or None,
+            state_file=_env("METRICS_STATE_FILE", "/config/metrics-state.json"),
         )
 
         web = WebSettings(
-            port=int(env.get("BLACKVUESYNC_PORT", "8080")),
+            port=int(_env("BLACKVUESYNC_PORT", "8080")),
         )
 
-        admin_password = env.get("BLACKVUESYNC_ADMIN_PASSWORD", "")
+        admin_password = _env("BLACKVUESYNC_ADMIN_PASSWORD", "")
         if admin_password:
             # password hashing deferred to phase c; first-run wizard will hash it
             logger.info(
@@ -550,7 +557,7 @@ class SettingsStore:
                 "by the first-run wizard in phase c"
             )
         auth = AuthSettings(
-            username=env.get("BLACKVUESYNC_ADMIN_USERNAME", "admin"),
+            username=_env("BLACKVUESYNC_ADMIN_USERNAME", "admin"),
             password_hash="",
             session_secret=secrets.token_hex(32),
         )

@@ -55,12 +55,16 @@ _DEFAULT_SETTINGS_PATH = Path(
 def _try_load_settings_store(path: Path) -> SettingsStore | None:
     """attempts to load or bootstrap a settings store; returns None on failure.
 
-    in cli diagnostic mode (no /config directory), the store is unavailable
-    and settings fall back entirely to cli args.
+    in cli diagnostic mode (no /config directory) or when env-var bootstrap
+    encounters malformed inputs, the store is unavailable and settings fall
+    back entirely to cli args. failure is logged but does not crash the cli.
     """
     try:
         return SettingsStore(path)
-    except (OSError, PermissionError) as e:
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        # broad catch is deliberate: the cli must keep working even if the
+        # settings file is corrupt, env vars are malformed, or perms are off.
+        # phase c (web ui) surfaces these failures to the operator.
         logger.debug("settings store unavailable at %s: %s", path, e)
         return None
 

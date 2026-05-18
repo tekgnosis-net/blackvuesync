@@ -624,6 +624,56 @@ def test_bootstrap_from_env_basic(settings_path: Path) -> None:
     assert s.auth.username == "boss"
 
 
+def test_bootstrap_treats_empty_env_vars_as_absent(settings_path: Path) -> None:
+    """verifies empty-string env vars are treated as unset.
+
+    regression test: the project Dockerfile sets ENV X="" as a sentinel for
+    "not configured" (matching blackvuesync.sh's `[ -n "${X:-}" ]` pattern).
+    bootstrap must use defaults for empty-string values to avoid int("")
+    and float("") ValueError crashes during container startup.
+    """
+    # simulates the Dockerfile ENV section: many vars set to empty string
+    env = {
+        "ADDRESS": "192.168.1.100",
+        "TIMEOUT": "",
+        "MAX_USED_DISK": "",
+        "KEEP": "",
+        "GROUPING": "",
+        "PRIORITY": "",
+        "LOG_FORMAT": "",
+        "METRICS_FILE": "",
+        "METRICS_JOB": "",
+        "METRICS_INSTANCE": "",
+        "METRICS_STATE_FILE": "",
+        "RETRY_FAILED_AFTER": "",
+        "INCLUDE": "",
+        "EXCLUDE": "",
+        "SKIP_METADATA": "",
+        "AFFINITY_KEY": "",
+        "VERBOSE": "",
+        "QUIET": "",
+    }
+    store = _make_store(settings_path, env=env)
+    s = store.get()
+
+    # defaults must apply for empty-string numeric env vars (not ValueError)
+    assert s.connection.address == "192.168.1.100"
+    assert s.connection.timeout_seconds == 10.0
+    assert s.retention.keep == "2w"
+    assert s.retention.max_used_disk_percent == 90
+    assert s.sync.priority == "date"
+    assert s.sync.grouping == "none"
+    assert s.sync.retry_failed_after == "1d"
+    assert s.sync.include == ()
+    assert s.sync.exclude == ()
+    assert s.sync.skip_metadata == ()
+    assert s.sync.affinity_key is None
+    assert s.logging.verbose == 0
+    assert s.logging.format == "text"
+    assert s.metrics.file is None
+    assert s.metrics.instance is None
+
+
 def test_bootstrap_default_schedule(settings_path: Path) -> None:
     """verifies default schedule is */15 * * * * when BLACKVUESYNC_SCHEDULE unset."""
     store = _make_store(settings_path, env={})
