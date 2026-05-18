@@ -2,8 +2,8 @@ FROM alpine:3.23.4
 
 LABEL org.opencontainers.image.title="BlackVue Sync"
 LABEL org.opencontainers.image.description="Hands-off synchronization of recordings from a BlackVue dashcam with a local directory over a LAN"
-LABEL org.opencontainers.image.url="https://github.com/acolomba/blackvuesync"
-LABEL org.opencontainers.image.source="https://github.com/acolomba/blackvuesync"
+LABEL org.opencontainers.image.url="https://github.com/tekgnosis-net/blackvuesync"
+LABEL org.opencontainers.image.source="https://github.com/tekgnosis-net/blackvuesync"
 LABEL org.opencontainers.image.licenses="MIT"
 LABEL org.opencontainers.image.authors="Alessandro Colomba"
 

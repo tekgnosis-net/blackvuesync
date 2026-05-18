@@ -8,4 +8,4 @@ docker run -it --rm \
     -e RUN_ONCE=1 \
     -e VERBOSE=1 \
     --name blackvuesync \
-acolomba/blackvuesync
+ghcr.io/tekgnosis-net/blackvuesync

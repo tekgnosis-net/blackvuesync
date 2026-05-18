@@ -1,14 +1,14 @@
 # BlackVue Sync
 
-[![CI](https://github.com/acolomba/blackvuesync/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/acolomba/blackvuesync/actions/workflows/ci.yml)
-[![Build Docker image](https://github.com/acolomba/blackvuesync/actions/workflows/docker-build.yml/badge.svg?branch=main)](https://github.com/acolomba/blackvuesync/actions/workflows/docker-build.yml)
-[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=acolomba_blackvuesync&metric=alert_status)](https://sonarcloud.io/summary/overall?id=acolomba_blackvuesync)
-[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=acolomba_blackvuesync&metric=coverage)](https://sonarcloud.io/summary/overall?id=acolomba_blackvuesync)
-[![Bugs](https://sonarcloud.io/api/project_badges/measure?project=acolomba_blackvuesync&metric=bugs)](https://sonarcloud.io/summary/overall?id=acolomba_blackvuesync)
-[![Code Smells](https://sonarcloud.io/api/project_badges/measure?project=acolomba_blackvuesync&metric=code_smells)](https://sonarcloud.io/summary/overall?id=acolomba_blackvuesync)
-[![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=acolomba_blackvuesync&metric=sqale_rating)](https://sonarcloud.io/summary/overall?id=acolomba_blackvuesync)
-[![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=acolomba_blackvuesync&metric=reliability_rating)](https://sonarcloud.io/summary/overall?id=acolomba_blackvuesync)
-[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=acolomba_blackvuesync&metric=security_rating)](https://sonarcloud.io/summary/overall?id=acolomba_blackvuesync)
+[![CI](https://github.com/tekgnosis-net/blackvuesync/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/tekgnosis-net/blackvuesync/actions/workflows/ci.yml)
+[![Build Docker image](https://github.com/tekgnosis-net/blackvuesync/actions/workflows/docker-build.yml/badge.svg?branch=main)](https://github.com/tekgnosis-net/blackvuesync/actions/workflows/docker-build.yml)
+[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=tekgnosis-net_blackvuesync&metric=alert_status)](https://sonarcloud.io/summary/overall?id=tekgnosis-net_blackvuesync)
+[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=tekgnosis-net_blackvuesync&metric=coverage)](https://sonarcloud.io/summary/overall?id=tekgnosis-net_blackvuesync)
+[![Bugs](https://sonarcloud.io/api/project_badges/measure?project=tekgnosis-net_blackvuesync&metric=bugs)](https://sonarcloud.io/summary/overall?id=tekgnosis-net_blackvuesync)
+[![Code Smells](https://sonarcloud.io/api/project_badges/measure?project=tekgnosis-net_blackvuesync&metric=code_smells)](https://sonarcloud.io/summary/overall?id=tekgnosis-net_blackvuesync)
+[![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=tekgnosis-net_blackvuesync&metric=sqale_rating)](https://sonarcloud.io/summary/overall?id=tekgnosis-net_blackvuesync)
+[![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=tekgnosis-net_blackvuesync&metric=reliability_rating)](https://sonarcloud.io/summary/overall?id=tekgnosis-net_blackvuesync)
+[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=tekgnosis-net_blackvuesync&metric=security_rating)](https://sonarcloud.io/summary/overall?id=tekgnosis-net_blackvuesync)
 
 Synchronizes recordings from a BlackVue dashcam with a local directory over a LAN.
 
@@ -19,7 +19,7 @@ A typical setup would be a periodic cron job or a Docker container running on a 
 ## Features
 
 * **Portable runtimes:**
-  * A [single, self-contained Python script](https://github.com/acolomba/blackvuesync/blob/master/blackvuesync.py) with no third-party dependencies. It can be copied and run anywhere, either [manually](#manual-usage) or [periodically](#unattended-usage).
+  * A [single, self-contained Python script](https://github.com/tekgnosis-net/blackvuesync/blob/main/blackvuesync.py) with no third-party dependencies. It can be copied and run anywhere, either [manually](#manual-usage) or [periodically](#unattended-usage).
   * A [docker image](#docker) that runs periodically via an internal cron job. Supports amd64 (Intel), arm64 (Apple Silicon, Raspberry Pi 4+) and armv7 (Raspberry Pi 2/3).
 * **Smart**: Only downloads recordings that haven't already been downloaded.
 * **Resilient**: If a download interrupts for whatever reason, the script resumes where it left off the next time it runs. This is especially useful for possibly unreliable Wi-Fi connections from a garage.
@@ -84,8 +84,8 @@ BlackVue Sync is a single script, and can be obtained in a number of ways:
 
 * **[uv](https://docs.astral.sh/uv/)**: Run with `uvx blackvuesync <args>`, or install with `uv tool install blackvuesync` and run with `blackvuesync <args>`.
 * **[Pip](https://pypi.org/project/pip/):** Install with `pip install blackvuesync` and run with `blackvuesync <args>`.
-* **Direct:** [Download from GitHub](https://raw.githubusercontent.com/acolomba/blackvuesync/refs/heads/main/blackvuesync.py), save to the desired location, and either run it with `python3 blackvuesync.py <args>`, or mark it executable and run it with `blackvuesync.py <args>`.
-* **Docker Hub:** The [Docker image](https://hub.docker.com/r/acolomba/blackvuesync) can be pulled with `docker pull acolomba/blackvuesync`.
+* **Direct:** [Download from GitHub](https://raw.githubusercontent.com/tekgnosis-net/blackvuesync/refs/heads/main/blackvuesync.py), save to the desired location, and either run it with `python3 blackvuesync.py <args>`, or mark it executable and run it with `blackvuesync.py <args>`.
+* **GHCR:** The [Docker image](https://github.com/tekgnosis-net/blackvuesync/pkgs/container/blackvuesync) can be pulled with `docker pull ghcr.io/tekgnosis-net/blackvuesync`.
 
 The interactive instructions assume a uv or Pip installation.
 
@@ -234,13 +234,13 @@ The [openmediavault](http://www.openmediavault.org/) NAS solution allows running
 
 Example:
 
-![openmediavault Scheduled Job](https://raw.githubusercontent.com/acolomba/blackvuesync/master/docs/images/cron-example-openmediavault.png)
+![openmediavault Scheduled Job](https://raw.githubusercontent.com/tekgnosis-net/blackvuesync/main/docs/images/cron-example-openmediavault.png)
 
 #### Docker
 
 ##### Overview
 
-The [acolomba/blackvuesync](https://hub.docker.com/r/acolomba/blackvuesync/) docker image sets up a cron job internal to the container that runs the synchronization operation every 15 minutes.
+The [ghcr.io/tekgnosis-net/blackvuesync](https://github.com/tekgnosis-net/blackvuesync/pkgs/container/blackvuesync) docker image sets up a cron job internal to the container that runs the synchronization operation every 15 minutes.
 
 ##### Quick Start
 
@@ -254,7 +254,7 @@ docker run -it --rm \
     -e VERBOSE=1 \
     -e RUN_ONCE=1 \
     --name blackvuesync \
-acolomba/blackvuesync
+ghcr.io/tekgnosis-net/blackvuesync
 ```
 
 Once that works, a typical invocation would be similar to:
@@ -268,14 +268,14 @@ docker run -d --restart unless-stopped \
     -e TZ="America/New_York" \
     -e KEEP=2w \
     --name blackvuesync \
-acolomba/blackvuesync
+ghcr.io/tekgnosis-net/blackvuesync
 ```
 
 ##### Docker Compose
 
 [Docker Compose](https://docs.docker.com/compose/) may offer an easier, more repeatable and extensible option for running a BlackVueSync Docker container.
 
-After downloading the Docker [Compose file](https://raw.githubusercontent.com/acolomba/blackvuesync/main/docker-compose.yml) and editing its values as desired, BlackVueSync can be started with:
+After downloading the Docker [Compose file](https://raw.githubusercontent.com/tekgnosis-net/blackvuesync/main/docker-compose.yml) and editing its values as desired, BlackVueSync can be started with:
 
 ```sh
 docker-compose up -d

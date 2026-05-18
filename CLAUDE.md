@@ -1,5 +1,7 @@
 # CLAUDE.md
 
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 ## Project Overview
 
 BlackVue Sync is a single-file Python utility that synchronizes recordings from BlackVue dashcams to a local directory over HTTP. The project emphasizes simplicity and portability with zero third-party dependencies, packaged both as a standalone script and a Docker container.
@@ -120,15 +122,30 @@ Two logger hierarchies:
 
 ### Running Tests
 
-Run all tests:
-
 ```bash
-# unit tests
+# all unit tests
 pytest test/blackvuesync_test.py -v
 
-# integration tests
+# single unit test (by node id or keyword expression)
+pytest test/blackvuesync_test.py::test_name -v
+pytest test/blackvuesync_test.py -k "retention and weekly" -v
+
+# all integration tests (Behave BDD against an in-process mock dashcam)
 behave
+
+# a single feature or scenario
+behave features/sync_basic.feature
+behave -n "scenario name substring"
+
+# integration tests against the Docker image instead of a subprocess
+behave -D implementation=docker
+
+# combined unit+integration coverage (writes coverage_report/index.html)
+./coverage.sh
 ```
+
+`features/CLAUDE.md` documents the BDD harness (mock dashcam, step library, userdata
+flags). Read it before changing anything under `features/`.
 
 ## Important Constraints
 
@@ -157,3 +174,5 @@ The Docker image (`Dockerfile`):
 - Internal cron job runs every 15 minutes (see `crontab` file)
 - `entrypoint.sh` handles user switching and cron setup
 - `blackvuesync.sh` wrapper translates env vars to CLI args
+- `run.sh` is a local smoke-test that runs the published image against a real dashcam
+  address with `DRY_RUN=1 RUN_ONCE=1` -- useful for sanity-checking image changes
