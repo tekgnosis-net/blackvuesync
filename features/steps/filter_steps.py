@@ -8,7 +8,7 @@ import re
 from behave import then, when
 from behave.runner import Context
 
-from blackvuesync import RECORDING_DIRECTIONS, RECORDING_TYPES
+from blackvuesync.sync import RECORDING_DIRECTIONS, RECORDING_TYPES
 from features.steps.blackvuesync_steps import execute_blackvuesync
 
 _recording_filename_re = re.compile(

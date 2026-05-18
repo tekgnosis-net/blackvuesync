@@ -11,6 +11,7 @@ import sys
 import time
 
 import blackvuesync.sync as _sync
+from blackvuesync import __version__
 from blackvuesync.metrics import (
     METRICS_DEFAULT_JOB,
     SyncMetrics,
@@ -46,8 +47,6 @@ cron_logger = logging.getLogger("cron")
 
 def parse_args() -> argparse.Namespace:
     """parses the command-line arguments"""
-    from blackvuesync import __version__
-
     arg_parser = argparse.ArgumentParser(
         description="Synchronizes BlackVue dashcam recordings with a local directory.",
         epilog="Bug reports: https://github.com/tekgnosis-net/blackvuesync/issues",
