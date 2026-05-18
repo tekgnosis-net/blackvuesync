@@ -200,7 +200,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    """run forrest run"""
+    """runs the sync workflow and returns the exit code."""
     # pylint: disable=too-many-branches,too-many-statements
     args = parse_args()
 
