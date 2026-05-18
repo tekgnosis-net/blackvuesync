@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import os
 from datetime import timedelta
+from typing import Optional
 
 from flask import Flask, Response, request
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+from blackvuesync.server.progress import ProgressPublisher
 from blackvuesync.settings import SettingsStore
 
 
 def create_app(
     settings_store: SettingsStore,
     testing: bool = False,
+    progress_publisher: Optional[ProgressPublisher] = None,
 ) -> Flask:
     """constructs and configures the Flask app with auth, routes, and middleware.
 
@@ -23,6 +26,9 @@ def create_app(
     """
     app = Flask(__name__, template_folder="templates", static_folder="static")
     app.settings_store = settings_store  # type: ignore[attr-defined]
+    # attaches or creates the progress publisher; defaults to a new instance so
+    # all routes have a live publisher even in tests that don't supply one.
+    app.progress_publisher = progress_publisher or ProgressPublisher()  # type: ignore[attr-defined]
 
     settings = settings_store.get()
     secret = settings.auth.session_secret or "dev-insecure-placeholder"
@@ -59,8 +65,10 @@ def create_app(
     # suppressed below because the deferred import is intentional.
 
     # pylint: disable=import-outside-toplevel
+    from blackvuesync.server.routes.api_sync import api_sync_bp
     from blackvuesync.server.routes.auth import bp as auth_bp
     from blackvuesync.server.routes.health import bp as health_bp
+    from blackvuesync.server.routes.hx_sync import hx_sync_bp
     from blackvuesync.server.routes.ui import bp as ui_bp
 
     # pylint: enable=import-outside-toplevel
@@ -68,6 +76,8 @@ def create_app(
     app.register_blueprint(auth_bp)
     app.register_blueprint(ui_bp)
     app.register_blueprint(health_bp)
+    app.register_blueprint(api_sync_bp)
+    app.register_blueprint(hx_sync_bp)
 
     @app.after_request
     def add_security_headers(response: Response) -> Response:

@@ -1,0 +1,33 @@
+<div class="card sync-status-card" id="sync-status-card">
+  <div class="card-header">
+    <h3 class="card-title">Sync Status</h3>
+    <span class="badge badge-{{ snap.state }}">{{ snap.state }}</span>
+  </div>
+  <div class="card-body">
+    {% if snap.state == "running" %}
+      <p class="sync-job-id">job: {{ snap.job_id[:8] }}</p>
+      <div class="progress-bar-container">
+        <div class="progress-bar" style="width: {{ snap.percent | round(1) }}%"></div>
+      </div>
+      <p class="sync-files">
+        {{ snap.files_completed }} / {{ snap.files_total }} files
+        {% if snap.files_failed > 0 %}
+          ({{ snap.files_failed }} failed)
+        {% endif %}
+      </p>
+      {% if snap.current_file %}
+        <p class="sync-current-file">
+          {{ snap.current_file.filename }}
+          ({{ snap.current_file.percent | round(1) }}%)
+        </p>
+      {% endif %}
+    {% elif snap.state == "idle" %}
+      <p class="sync-idle">no sync in progress</p>
+    {% elif snap.state in ("complete", "failed") %}
+      <p class="sync-summary">
+        completed: {{ snap.files_completed }} files,
+        {{ snap.bytes_downloaded_total | filesizeformat }}
+      </p>
+    {% endif %}
+  </div>
+</div>

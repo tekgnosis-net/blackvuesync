@@ -22,10 +22,15 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, cast
 
 if TYPE_CHECKING:
+    from typing import Union
+
     from blackvuesync.metrics import SyncMetrics
+    from blackvuesync.server.progress import ProgressPublisher, _NoopPublisher
+
+    _AnyPublisher = Union[ProgressPublisher, _NoopPublisher]
 
 # logging format strings and accepted values
 TEXT_LOG_FORMAT = "%(asctime)s: %(levelname)s %(message)s"
@@ -489,12 +494,13 @@ def remove_download_failed_marker(
         )
 
 
-def download_file(
+def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     base_url: str,
     filename: str,
     destination: str,
     group_name: str | None,
     metrics: SyncMetrics | None = None,
+    on_chunk: Callable[[int, int], None] | None = None,
 ) -> tuple[bool, int | None]:
     """downloads a file from the dashcam to the destination directory; returns whether data was transferred"""
     # pylint: disable=too-many-branches,too-many-locals,too-many-statements
@@ -568,9 +574,14 @@ def download_file(
                 size = headers.get("Content-Length")
 
                 # writes response to temp file
+                downloaded_bytes = 0
+                total_bytes = int(size) if size else 0
                 with open(temp_filepath, "wb") as f:
                     while chunk := response.read(DOWNLOAD_CHUNK_SIZE):
                         f.write(chunk)
+                        downloaded_bytes += len(chunk)
+                        if on_chunk is not None:
+                            on_chunk(downloaded_bytes, total_bytes)
         finally:
             end = time.perf_counter()
             elapsed_s = end - start
@@ -641,11 +652,12 @@ def download_file(
         ) from e
 
 
-def download_recording(
+def download_recording(  # pylint: disable=too-many-locals
     base_url: str,
     recording: Recording,
     destination: str,
     metrics: SyncMetrics | None = None,
+    publisher: _AnyPublisher | None = None,
 ) -> None:
     """downloads the set of recordings, including gps data, for the given filename from the dashcam to the destination
     directory"""
@@ -665,11 +677,38 @@ def download_recording(
     # whether any file of a recording (video, thumbnail, gps, accel.) was downloaded
     any_downloaded = False
 
+    def _dl(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+        fn: str,
+        artifact_type: str,
+    ) -> tuple[bool, int | None]:
+        """wraps download_file with publisher start/finish notifications."""
+        if publisher is not None:
+            publisher.start_file(
+                fn,
+                artifact_type,  # type: ignore[arg-type]
+                0,
+                direction=cast(Literal["F", "R", "I", "O"], recording.direction),
+            )
+        try:
+            result = download_file(
+                base_url,
+                fn,
+                destination,
+                recording.group_name,
+                metrics,
+                on_chunk=publisher.update_bytes if publisher is not None else None,
+            )
+            if publisher is not None:
+                publisher.finish_file(success=result[0])
+            return result
+        except Exception as exc:
+            if publisher is not None:
+                publisher.finish_file(success=False, reason=type(exc).__name__)
+            raise
+
     # downloads the video recording
     filename = recording.filename
-    downloaded, speed_bps = download_file(
-        base_url, filename, destination, recording.group_name, metrics
-    )
+    downloaded, speed_bps = _dl(filename, "mp4")
     any_downloaded |= downloaded
 
     # downloads the thumbnail file
@@ -677,9 +716,7 @@ def download_recording(
         thm_filename = (
             f"{recording.base_filename}_{recording.type}{recording.direction}.thm"
         )
-        downloaded, _ = download_file(
-            base_url, thm_filename, destination, recording.group_name, metrics
-        )
+        downloaded, _ = _dl(thm_filename, "thm")
         any_downloaded |= downloaded
     else:
         logger.debug(
@@ -695,9 +732,7 @@ def download_recording(
     # downloads the accelerometer data
     if "3" not in skip_metadata:
         tgf_filename = f"{recording.base_filename}_{recording.type}.3gf"
-        downloaded, _ = download_file(
-            base_url, tgf_filename, destination, recording.group_name, metrics
-        )
+        downloaded, _ = _dl(tgf_filename, "3gf")
         any_downloaded |= downloaded
     else:
         logger.debug(
@@ -713,9 +748,7 @@ def download_recording(
     # downloads the gps data
     if "g" not in skip_metadata:
         gps_filename = f"{recording.base_filename}_{recording.type}.gps"
-        downloaded, _ = download_file(
-            base_url, gps_filename, destination, recording.group_name, metrics
-        )
+        downloaded, _ = _dl(gps_filename, "gps")
         any_downloaded |= downloaded
     else:
         logger.debug(
@@ -988,7 +1021,7 @@ def prepare_destination(destination: str, grouping: str) -> None:
                 os.remove(outdated_filepath)
 
 
-def sync(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+def sync(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     address: str,
     destination: str,
     grouping: str,
@@ -996,6 +1029,8 @@ def sync(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     include: tuple[str, ...] | None,
     exclude: tuple[str, ...] | None,
     metrics: SyncMetrics | None = None,
+    publisher: _AnyPublisher | None = None,
+    job_id: str | None = None,
 ) -> None:
     """synchronizes the recordings at the dashcam address with the destination directory"""
     prepare_destination(destination, grouping)
@@ -1024,8 +1059,17 @@ def sync(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     # sorts the dashcam recordings so we download them according to some priority
     sort_recordings(current_dashcam_recordings, download_priority)
 
-    for recording in current_dashcam_recordings:
-        download_recording(base_url, recording, destination, metrics)
+    if publisher is not None:
+        publisher.begin_job(len(current_dashcam_recordings), job_id=job_id)
+
+    sync_success = False
+    try:
+        for recording in current_dashcam_recordings:
+            download_recording(base_url, recording, destination, metrics, publisher)
+        sync_success = True
+    finally:
+        if publisher is not None:
+            publisher.end_job(sync_success)
 
 
 def is_empty_directory(dirpath: str) -> bool:
