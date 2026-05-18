@@ -9,6 +9,7 @@ import os
 import socket
 import sys
 import time
+from pathlib import Path
 
 import blackvuesync.sync as _sync
 from blackvuesync import __version__
@@ -24,6 +25,7 @@ from blackvuesync.metrics import (
     parse_pushgateway_url,
     save_metrics_state,
 )
+from blackvuesync.settings import SettingsStore
 from blackvuesync.sync import (
     LOG_FORMATS,
     calc_cutoff_date,
@@ -43,6 +45,24 @@ from blackvuesync.sync import (
 # module-level loggers
 logger = logging.getLogger()
 cron_logger = logging.getLogger("cron")
+
+# default settings file path; can be overridden for testing
+_DEFAULT_SETTINGS_PATH = Path(
+    os.environ.get("BLACKVUESYNC_CONFIG_PATH", "/config/settings.json")
+)
+
+
+def _try_load_settings_store(path: Path) -> SettingsStore | None:
+    """attempts to load or bootstrap a settings store; returns None on failure.
+
+    in cli diagnostic mode (no /config directory), the store is unavailable
+    and settings fall back entirely to cli args.
+    """
+    try:
+        return SettingsStore(path)
+    except (OSError, PermissionError) as e:
+        logger.debug("settings store unavailable at %s: %s", path, e)
+        return None
 
 
 def parse_args() -> argparse.Namespace:
@@ -202,6 +222,11 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     """runs the sync workflow and returns the exit code."""
     # pylint: disable=too-many-branches,too-many-statements
+
+    # loads or bootstraps persistent settings (env vars seed the file on first
+    # run; subsequent runs read the file). cli args override for diagnostics.
+    _try_load_settings_store(_DEFAULT_SETTINGS_PATH)
+
     args = parse_args()
 
     configure_logging(args.log_format)
