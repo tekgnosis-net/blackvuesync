@@ -440,7 +440,9 @@ def _run_serve(args: argparse.Namespace) -> int:
 def main() -> int:
     """dispatches to sync or serve subcommand and returns the exit code."""
     # loads or bootstraps persistent settings (env vars seed the file on first
-    # run; subsequent runs read the file). cli args override for diagnostics.
+    # run; subsequent runs read the file). the return value is intentionally
+    # discarded here: the side-effect of seeding the file is all that matters at
+    # this point. phase e will thread the store through to _run_sync/_run_serve.
     _try_load_settings_store(_DEFAULT_SETTINGS_PATH)
 
     args = parse_args()
