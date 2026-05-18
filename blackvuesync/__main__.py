@@ -305,7 +305,7 @@ def main() -> int:
             metrics.record_run_failure(classify_run_failure(e))
         exit_code = 0 if args.cron else 1
     except RuntimeError as e:
-        logger.error(
+        logger.exception(
             e.args[0],
             extra={
                 "event": "sync_error",
