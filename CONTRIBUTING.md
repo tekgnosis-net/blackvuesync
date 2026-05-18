@@ -2,7 +2,7 @@
 
 ## General
 
-This project welcomes new [issues](https://github.com/acolomba/blackvuesync/issues) and [pull requests](https://github.com/acolomba/blackvuesync/pulls).
+This project welcomes new [issues](https://github.com/tekgnosis-net/blackvuesync/issues) and [pull requests](https://github.com/tekgnosis-net/blackvuesync/pulls).
 
 ## Responsible AI contributions
 
@@ -17,7 +17,7 @@ This AI contribution policy is loosely based on the one in the [Microsoft Open S
 
 ```bash
 # clone and setup
-git clone https://github.com/acolomba/blackvuesync.git
+git clone https://github.com/tekgnosis-net/blackvuesync.git
 cd blackvuesync
 
 # create virtual environment and install dependencies

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 BlackVue Sync is a single-file Python utility that synchronizes recordings from BlackVue dashcams to a local directory over HTTP. The project emphasizes simplicity and portability with zero third-party dependencies, packaged both as a standalone script and a Docker container.
 
-This project is on GitHub: <https://github.com/acolomba/blackvuesync>
+This project is a fork on GitHub: <https://github.com/tekgnosis-net/blackvuesync> (upstream: <https://github.com/acolomba/blackvuesync>)
 
 ## Claude Code
 

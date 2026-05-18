@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Synchronizes recordings from a BlackVue dashcam with a local directory over a LAN.
-https://github.com/acolomba/blackvuesync
+https://github.com/tekgnosis-net/blackvuesync
 """
 
 from __future__ import annotations
@@ -1546,7 +1546,7 @@ def parse_args() -> argparse.Namespace:
     """parses the command-line arguments"""
     arg_parser = argparse.ArgumentParser(
         description="Synchronizes BlackVue dashcam recordings with a local directory.",
-        epilog="Bug reports: https://github.com/acolomba/BlackVueSync",
+        epilog="Bug reports: https://github.com/tekgnosis-net/blackvuesync/issues",
     )
     arg_parser.add_argument(
         "address", metavar="ADDRESS", help="dashcam IP address or name"
