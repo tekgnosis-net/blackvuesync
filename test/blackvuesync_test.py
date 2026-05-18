@@ -15,6 +15,8 @@ import urllib.request
 import pytest
 
 import blackvuesync
+import blackvuesync.__main__ as _main
+import blackvuesync.sync as _sync
 
 
 @pytest.mark.parametrize(
@@ -288,13 +290,13 @@ def test_get_group_name(
 )
 def test_calc_cutoff_date(keep: str, expected_cutoff_date: datetime.datetime) -> None:
     try:
-        blackvuesync.today = datetime.datetime(2018, 10, 30)
+        _sync.today = datetime.datetime(2018, 10, 30)
 
         cutoff_date = blackvuesync.calc_cutoff_date(keep)
 
         assert expected_cutoff_date == cutoff_date
     finally:
-        blackvuesync.today = datetime.date.today()
+        _sync.today = datetime.date.today()
 
 
 @pytest.mark.parametrize(
@@ -522,21 +524,21 @@ class TestFailedMarker:
         """verifies that downloads are blocked when a recent marker exists."""
         with tempfile.TemporaryDirectory() as dest:
             filename = "20181029_131513_NF.mp4"
-            original = blackvuesync.retry_failed_after
+            original = _sync.retry_failed_after
 
             try:
-                blackvuesync.retry_failed_after = datetime.timedelta(days=1)
+                _sync.retry_failed_after = datetime.timedelta(days=1)
                 blackvuesync.mark_download_failed(dest, None, filename)
 
                 assert blackvuesync.is_download_blocked_by_failure(dest, None, filename)
             finally:
-                blackvuesync.retry_failed_after = original
+                _sync.retry_failed_after = original
 
     def test_is_download_blocked_by_failure_stale_marker(self) -> None:
         """verifies that downloads are not blocked when the marker is stale."""
         with tempfile.TemporaryDirectory() as dest:
             filename = "20181029_131513_NF.mp4"
-            original = blackvuesync.retry_failed_after
+            original = _sync.retry_failed_after
 
             try:
                 marker_filepath = blackvuesync.get_failed_marker_filepath(
@@ -546,13 +548,13 @@ class TestFailedMarker:
                 with open(marker_filepath, "w", encoding="utf-8") as f:
                     f.write(old_time.isoformat())
 
-                blackvuesync.retry_failed_after = datetime.timedelta(days=1)
+                _sync.retry_failed_after = datetime.timedelta(days=1)
 
                 assert not blackvuesync.is_download_blocked_by_failure(
                     dest, None, filename
                 )
             finally:
-                blackvuesync.retry_failed_after = original
+                _sync.retry_failed_after = original
 
     def test_is_download_blocked_by_failure_corrupted_marker(self) -> None:
         """verifies that corrupted markers are treated as stale."""
@@ -582,14 +584,14 @@ class TestFailedMarker:
             assert os.path.exists(marker_filepath)
             assert group_name in marker_filepath
 
-            original = blackvuesync.retry_failed_after
+            original = _sync.retry_failed_after
             try:
-                blackvuesync.retry_failed_after = datetime.timedelta(days=1)
+                _sync.retry_failed_after = datetime.timedelta(days=1)
                 assert blackvuesync.is_download_blocked_by_failure(
                     dest, group_name, filename
                 )
             finally:
-                blackvuesync.retry_failed_after = original
+                _sync.retry_failed_after = original
 
             blackvuesync.remove_download_failed_marker(dest, group_name, filename)
             assert not os.path.exists(marker_filepath)
@@ -619,15 +621,15 @@ class TestFailedMarker:
         """verifies that dry-run reports files as would-download even with failure markers."""
         with tempfile.TemporaryDirectory() as dest:
             filename = "20181029_131513_NF.mp4"
-            original_dry_run = blackvuesync.dry_run
-            original_retry = blackvuesync.retry_failed_after
+            original_dry_run = _sync.dry_run
+            original_retry = _sync.retry_failed_after
 
             try:
-                blackvuesync.retry_failed_after = datetime.timedelta(days=1)
+                _sync.retry_failed_after = datetime.timedelta(days=1)
                 blackvuesync.mark_download_failed(dest, None, filename)
 
                 # enables dry-run mode
-                blackvuesync.dry_run = True
+                _sync.dry_run = True
 
                 downloaded, _ = blackvuesync.download_file(
                     "http://127.0.0.1:0", filename, dest, None
@@ -636,8 +638,8 @@ class TestFailedMarker:
                 # dry-run returns True (would download) despite failure marker
                 assert downloaded is True
             finally:
-                blackvuesync.dry_run = original_dry_run
-                blackvuesync.retry_failed_after = original_retry
+                _sync.dry_run = original_dry_run
+                _sync.retry_failed_after = original_retry
 
     def test_retention_removes_failed_markers(self) -> None:
         """verifies that retention cleanup removes .failed markers alongside recordings."""
@@ -836,7 +838,7 @@ def test_download_file_streams_response_in_chunks(
 
     with tempfile.TemporaryDirectory() as destination:
         monkeypatch.setattr(urllib.request, "urlopen", lambda _request: FakeResponse())
-        monkeypatch.setattr(blackvuesync, "dry_run", False)
+        monkeypatch.setattr(_sync, "dry_run", False)
 
         downloaded, _ = blackvuesync.download_file(
             "http://127.0.0.1:1",
@@ -927,7 +929,7 @@ def test_sync_metrics_records_downloads_and_failures(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """verifies the metrics model tracks last-run counts and last success time."""
-    monkeypatch.setattr(blackvuesync, "dry_run", False)
+    monkeypatch.setattr(_sync, "dry_run", False)
     metrics = blackvuesync.SyncMetrics(
         run_start_monotonic=time.perf_counter(),
         run_start_timestamp=time.time(),
@@ -966,7 +968,7 @@ def test_sync_metrics_dry_run_does_not_update_last_success(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """verifies dry-run downloads do not update persisted last-success state."""
-    monkeypatch.setattr(blackvuesync, "dry_run", True)
+    monkeypatch.setattr(_sync, "dry_run", True)
     metrics = blackvuesync.SyncMetrics(
         run_start_monotonic=time.perf_counter(),
         run_start_timestamp=time.time(),
@@ -1143,9 +1145,9 @@ def test_main_writes_metrics_for_cron_unavailable_dashcam(
         def get_dashcam_filenames_raises(_base_url: str) -> list[str]:
             raise UserWarning("Dashcam unavailable")
 
-        monkeypatch.setattr(blackvuesync, "parse_args", lambda: args)
+        monkeypatch.setattr(_main, "parse_args", lambda: args)
         monkeypatch.setattr(
-            blackvuesync, "get_dashcam_filenames", get_dashcam_filenames_raises
+            _sync, "get_dashcam_filenames", get_dashcam_filenames_raises
         )
 
         assert blackvuesync.main() == 0
@@ -1192,9 +1194,9 @@ def test_main_writes_timeout_run_failure_metric(
         def get_dashcam_filenames_raises(_base_url: str) -> list[str]:
             raise UserWarning("Dashcam unavailable : <urlopen error timed out>")
 
-        monkeypatch.setattr(blackvuesync, "parse_args", lambda: args)
+        monkeypatch.setattr(_main, "parse_args", lambda: args)
         monkeypatch.setattr(
-            blackvuesync, "get_dashcam_filenames", get_dashcam_filenames_raises
+            _sync, "get_dashcam_filenames", get_dashcam_filenames_raises
         )
 
         assert blackvuesync.main() == 1
@@ -1239,20 +1241,18 @@ def test_main_unlocks_fd_zero(monkeypatch: pytest.MonkeyPatch) -> None:
         affinity_key=None,
     )
 
-    monkeypatch.setattr(blackvuesync, "parse_args", lambda: args)
-    monkeypatch.setattr(blackvuesync, "ensure_destination", lambda _destination: None)
-    monkeypatch.setattr(blackvuesync, "lock", lambda _destination: 0)
+    monkeypatch.setattr(_main, "parse_args", lambda: args)
+    monkeypatch.setattr(_main, "ensure_destination", lambda _destination: None)
+    monkeypatch.setattr(_main, "lock", lambda _destination: 0)
 
     def sync_noop(*_args: object) -> None:
         pass
 
-    monkeypatch.setattr(blackvuesync, "sync", sync_noop)
+    monkeypatch.setattr(_main, "sync", sync_noop)
     monkeypatch.setattr(
-        blackvuesync, "clean_destination", lambda _destination, _grouping: None
+        _main, "clean_destination", lambda _destination, _grouping: None
     )
-    monkeypatch.setattr(
-        blackvuesync, "unlock", lambda lf_fd: unlock_calls.append(lf_fd)
-    )
+    monkeypatch.setattr(_main, "unlock", lambda lf_fd: unlock_calls.append(lf_fd))
 
     assert blackvuesync.main() == 0
     assert unlock_calls == [0]
@@ -1327,16 +1327,14 @@ def test_main_skips_unlock_when_lock_raises(monkeypatch: pytest.MonkeyPatch) -> 
         affinity_key=None,
     )
 
-    monkeypatch.setattr(blackvuesync, "parse_args", lambda: args)
-    monkeypatch.setattr(blackvuesync, "ensure_destination", lambda _destination: None)
+    monkeypatch.setattr(_main, "parse_args", lambda: args)
+    monkeypatch.setattr(_main, "ensure_destination", lambda _destination: None)
 
     def lock_raises(_destination: str) -> int:
         raise UserWarning("Another instance is already running")
 
-    monkeypatch.setattr(blackvuesync, "lock", lock_raises)
-    monkeypatch.setattr(
-        blackvuesync, "unlock", lambda lf_fd: unlock_calls.append(lf_fd)
-    )
+    monkeypatch.setattr(_main, "lock", lock_raises)
+    monkeypatch.setattr(_main, "unlock", lambda lf_fd: unlock_calls.append(lf_fd))
 
     assert blackvuesync.main() == 1
     assert unlock_calls == []

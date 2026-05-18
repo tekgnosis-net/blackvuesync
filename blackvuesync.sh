@@ -65,4 +65,4 @@ fi
 # session key option if AFFINITY_KEY set
 [ -n "${AFFINITY_KEY:-}" ] && set -- "$@" --affinity-key "$AFFINITY_KEY"
 
-/blackvuesync.py "$@"
+python3 -m blackvuesync "${@}"
