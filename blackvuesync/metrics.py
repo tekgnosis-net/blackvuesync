@@ -8,7 +8,6 @@ import glob
 import json
 import logging
 import os
-import socket
 import time
 import urllib.error
 import urllib.parse
@@ -406,7 +405,7 @@ def push_metrics(
     try:
         with urllib.request.urlopen(request, timeout=timeout):
             pass
-    except (urllib.error.URLError, TimeoutError, socket.timeout, OSError) as e:
+    except OSError as e:
         cron_logger.warning(
             "Could not push metrics to Pushgateway : %s; error : %s; ignoring.",
             url,
