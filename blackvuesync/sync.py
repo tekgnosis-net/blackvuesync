@@ -1000,9 +1000,9 @@ def sync(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     """synchronizes the recordings at the dashcam address with the destination directory"""
     prepare_destination(destination, grouping)
 
-    # NOSONAR: BlackVue dashcam firmware exposes only HTTP on the LAN web
-    # server; HTTPS is not supported at the device. Deployment context is a
-    # trusted LAN. (Suppresses python:S5332.)
+    # BlackVue dashcam firmware exposes only HTTP on the LAN web server;
+    # HTTPS is not supported at the device. Deployment context is a trusted
+    # LAN. The trailing NOSONAR on the next line suppresses python:S5332.
     base_url = f"http://{address}"  # NOSONAR
     dashcam_filenames = get_dashcam_filenames(base_url)
     dashcam_recordings = [
