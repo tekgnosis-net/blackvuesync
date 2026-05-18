@@ -22,7 +22,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal, cast
 
 if TYPE_CHECKING:
     from typing import Union
@@ -687,6 +687,7 @@ def download_recording(  # pylint: disable=too-many-locals
                 fn,
                 artifact_type,  # type: ignore[arg-type]
                 0,
+                direction=cast(Literal["F", "R", "I", "O"], recording.direction),
             )
         try:
             result = download_file(
@@ -1020,7 +1021,7 @@ def prepare_destination(destination: str, grouping: str) -> None:
                 os.remove(outdated_filepath)
 
 
-def sync(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+def sync(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     address: str,
     destination: str,
     grouping: str,
@@ -1029,6 +1030,7 @@ def sync(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     exclude: tuple[str, ...] | None,
     metrics: SyncMetrics | None = None,
     publisher: _AnyPublisher | None = None,
+    job_id: str | None = None,
 ) -> None:
     """synchronizes the recordings at the dashcam address with the destination directory"""
     prepare_destination(destination, grouping)
@@ -1058,7 +1060,7 @@ def sync(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     sort_recordings(current_dashcam_recordings, download_priority)
 
     if publisher is not None:
-        publisher.begin_job(len(current_dashcam_recordings))
+        publisher.begin_job(len(current_dashcam_recordings), job_id=job_id)
 
     sync_success = False
     try:

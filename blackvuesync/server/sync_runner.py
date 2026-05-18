@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import threading
+import uuid
 from typing import Any
 
 from blackvuesync.server.progress import ProgressPublisher
@@ -41,13 +42,14 @@ def trigger_sync(
         current_snap = publisher.snapshot()
         return {"status": "already_running", "job_id": current_snap.job_id}
 
-    # lock acquired; begin the job and spawn the daemon thread
-    job_id = publisher.begin_job(0)
+    # pre-generate job_id before spawning the thread so the 202 response and
+    # the publisher state always agree on the same id.
+    job_id = uuid.uuid4().hex
 
     def _run() -> None:
         """runs sync under the lock; releases lock in finally."""
         try:
-            _do_sync(settings, publisher, metrics_state_file)
+            _do_sync(settings, publisher, metrics_state_file, job_id=job_id)
         finally:
             with contextlib.suppress(Exception):
                 _sync_lock.release()
@@ -62,12 +64,14 @@ def _do_sync(  # pylint: disable=too-many-locals
     settings: Any,
     publisher: ProgressPublisher,
     metrics_state_file: str | None,  # noqa: ARG001  # pylint: disable=unused-argument
+    *,
+    job_id: str,
 ) -> None:
     """performs the actual sync; called inside the daemon thread.
 
-    currently calls run_sync from blackvuesync.sync; in phase E this will
-    be replaced by an APScheduler-driven invocation. the publisher's end_job
-    is called in the finally block to guarantee the state machine transitions.
+    currently calls sync() from blackvuesync.sync; in phase E this will
+    be replaced by an APScheduler-driven invocation. sync() owns the full
+    job lifecycle (begin_job … end_job) using the pre-generated job_id.
     """
     # pylint: disable=import-outside-toplevel
     import blackvuesync.sync as _sync
@@ -81,7 +85,6 @@ def _do_sync(  # pylint: disable=too-many-locals
 
     # pylint: enable=import-outside-toplevel
 
-    success = False
     lf_fd = None
     try:
         address = settings.connection.address
@@ -114,8 +117,8 @@ def _do_sync(  # pylint: disable=too-many-locals
                 include,
                 exclude,
                 publisher=publisher,
+                job_id=job_id,
             )
-            success = True
         finally:
             clean_destination(destination, grouping)
     except Exception:  # pylint: disable=broad-exception-caught
@@ -124,7 +127,6 @@ def _do_sync(  # pylint: disable=too-many-locals
         if lf_fd is not None:
             with contextlib.suppress(Exception):
                 unlock(lf_fd)
-        publisher.end_job(success)
 
 
 __all__ = ["trigger_sync"]

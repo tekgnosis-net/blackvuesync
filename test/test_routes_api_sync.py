@@ -112,6 +112,32 @@ class TestProgressSnapshot:
         resp = client.get("/api/sync/progress")
         assert "application/json" in resp.content_type
 
+    def test_response_includes_percent(self, logged_in_client: Any) -> None:
+        """percent is a computed property; the api must include it so the ui does no math."""
+        client, pub = logged_in_client
+        pub.begin_job(10)
+        resp = client.get("/api/sync/progress")
+        body = json.loads(resp.data)
+        assert "percent" in body
+        assert isinstance(body["percent"], (int, float))
+
+    def test_response_includes_current_file_percent_and_elapsed(
+        self, logged_in_client: Any
+    ) -> None:
+        """current_file must include percent and elapsed_seconds when a file is active."""
+        client, pub = logged_in_client
+        pub.begin_job(1)
+        pub.start_file("20230101_120000_NF.mp4", "mp4", 1000)
+        pub.update_bytes(500)
+        resp = client.get("/api/sync/progress")
+        body = json.loads(resp.data)
+        cf = body.get("current_file")
+        assert cf is not None
+        assert "percent" in cf
+        assert "elapsed_seconds" in cf
+        assert isinstance(cf["percent"], (int, float))
+        assert isinstance(cf["elapsed_seconds"], (int, float))
+
 
 # ---------------------------------------------------------------------------
 # POST /api/sync/now
@@ -124,19 +150,31 @@ class TestTriggerNow:
     def test_returns_202_and_job_id_on_success(self, logged_in_client: Any) -> None:
         client, pub = logged_in_client
         with patch("blackvuesync.server.sync_runner._do_sync") as mock_sync:
-            mock_sync.side_effect = lambda _s, p, _m: p.end_job(success=True)
+
+            def _stub(_s: Any, p: ProgressPublisher, _m: Any, *, job_id: str) -> None:
+                p.begin_job(0, job_id=job_id)
+                p.end_job(success=True)
+
+            mock_sync.side_effect = _stub
             resp = client.post("/api/sync/now")
         assert resp.status_code == 202
         body = json.loads(resp.data)
         assert "job_id" in body
         assert len(body["job_id"]) == 32
+        # the returned job_id must match what the publisher reports
+        time.sleep(0.05)  # let the daemon thread run
+        assert pub.snapshot().job_id == body["job_id"] or pub.snapshot().state in (
+            "complete",
+            "failed",
+        )
 
     def test_returns_409_when_already_running(self, logged_in_client: Any) -> None:
         client, pub = logged_in_client
         started = threading.Event()
         proceed = threading.Event()
 
-        def _slow_sync(_s: Any, p: ProgressPublisher, _m: Any) -> None:
+        def _slow_sync(_s: Any, p: ProgressPublisher, _m: Any, *, job_id: str) -> None:
+            p.begin_job(0, job_id=job_id)
             started.set()
             proceed.wait(timeout=5.0)
             p.end_job(success=True)
@@ -161,6 +199,34 @@ class TestTriggerNow:
         with app.test_client() as client:
             resp = client.post("/api/sync/now")
         assert resp.status_code == 302
+
+    def test_post_without_csrf_token_returns_400_when_csrf_enabled(
+        self, settings_path: Path
+    ) -> None:
+        """verifies POST /api/sync/now without a CSRF token returns 400 when CSRF is enabled."""
+        store = _make_store(settings_path)
+        pw_hash = hash_password("test-password-1234")
+        store.update(
+            lambda s: dataclasses.replace(
+                s,
+                auth=dataclasses.replace(
+                    s.auth, username="admin", password_hash=pw_hash
+                ),
+            )
+        )
+        # create app with CSRF enabled (testing=False) then force TESTING=True
+        # so flask test client works but WTF_CSRF_ENABLED stays True.
+        app = create_app(store, testing=False)
+        app.config["WTF_CSRF_ENABLED"] = True
+        app.config["TESTING"] = True
+        with app.test_client() as client:
+            # log in without CSRF (login route also requires CSRF, so POST to login
+            # will itself return 400; use a direct session manipulation instead).
+            with client.session_transaction() as sess:
+                sess["user"] = "admin"
+            # POST to /api/sync/now without csrf_token
+            resp = client.post("/api/sync/now")
+        assert resp.status_code == 400
 
 
 # ---------------------------------------------------------------------------

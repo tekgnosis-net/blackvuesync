@@ -27,7 +27,7 @@ class FileProgress:  # pylint: disable=too-many-instance-attributes
     updated_at_monotonic: float
     bytes_per_second: float
     eta_seconds: float | None
-    state: Literal["starting", "downloading", "resumed", "complete", "failed"]
+    state: Literal["starting", "downloading", "complete", "failed"]
     failure_reason: str | None
 
     @property
@@ -107,9 +107,10 @@ class ProgressPublisher:
     # writer api
     # ------------------------------------------------------------------
 
-    def begin_job(self, files_total: int) -> str:
-        """starts a new sync job; returns the generated job_id."""
-        job_id = uuid.uuid4().hex
+    def begin_job(self, files_total: int, job_id: str | None = None) -> str:
+        """starts a new sync job; returns the job_id (generated if not provided)."""
+        if job_id is None:
+            job_id = uuid.uuid4().hex
         now_w = time.time()
         now_m = time.monotonic()
         with self._lock:
@@ -180,14 +181,16 @@ class ProgressPublisher:
                 return
             effective_total = total_bytes if total_bytes > 0 else cf.total_bytes
             elapsed = now_m - cf.started_at_monotonic
-            # exponential weighted moving average for bytes_per_second
+            # exponential weighted moving average for bytes_per_second;
+            # avg_bps_since_start is the cumulative average since the file started
+            # (not a true instantaneous rate). TODO: switch to a rolling window EWMA.
             if elapsed > 0:
-                instant_bps = downloaded / elapsed
+                avg_bps_since_start = downloaded / elapsed
                 alpha = 0.3
                 new_bps = (
-                    alpha * instant_bps + (1.0 - alpha) * cf.bytes_per_second
+                    alpha * avg_bps_since_start + (1.0 - alpha) * cf.bytes_per_second
                     if cf.bytes_per_second > 0
-                    else instant_bps
+                    else avg_bps_since_start
                 )
             else:
                 new_bps = cf.bytes_per_second
@@ -277,17 +280,18 @@ class ProgressPublisher:
         with self._lock:
             self._subscribers.add(q)
             # sends current state immediately on subscribe
-            with contextlib.suppress(queue.Full):
-                q.put_nowait(self._state)
+            initial = self._state
         try:
+            yield initial  # yields outside the lock so writers are never blocked
             while True:
                 try:
-                    yield q.get(timeout=30.0)
+                    snap = q.get(timeout=30.0)
                 except queue.Empty:
-                    # heartbeat: yield current snapshot so the SSE handler can
-                    # emit a keepalive comment.
+                    # heartbeat: snapshot under lock, yield outside so the sync
+                    # thread is never blocked waiting for a slow SSE consumer.
                     with self._lock:
-                        yield self._state
+                        snap = self._state
+                yield snap
         finally:
             with self._lock:
                 self._subscribers.discard(q)
@@ -322,7 +326,11 @@ class _NoopPublisher:
     conditional checks and stays free of flask imports.
     """
 
-    def begin_job(self, _files_total: int = 0) -> str:
+    def begin_job(  # pylint: disable=unused-argument
+        self,
+        _files_total: int = 0,
+        job_id: str | None = None,  # noqa: ARG002
+    ) -> str:
         """no-op begin_job; returns an empty string."""
         return ""
 

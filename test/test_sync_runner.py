@@ -50,8 +50,11 @@ def _noop(
     _settings: Any,
     pub: ProgressPublisher,
     _msf: Any,
+    *,
+    job_id: str,
 ) -> None:
-    """no-op _do_sync stub; immediately ends the job."""
+    """no-op _do_sync stub; simulates sync.py owning begin_job/end_job."""
+    pub.begin_job(0, job_id=job_id)
     pub.end_job(success=True)
 
 
@@ -60,10 +63,12 @@ def _slow_noop(
     pub: ProgressPublisher,
     _msf: Any,
     *,
+    job_id: str,
     started: threading.Event,
     proceed: threading.Event,
 ) -> None:
     """slow _do_sync stub; waits for proceed before ending the job."""
+    pub.begin_job(0, job_id=job_id)
     started.set()
     proceed.wait(timeout=5.0)
     pub.end_job(success=True)
@@ -94,8 +99,14 @@ class TestTriggerSync:
         started = threading.Event()
         proceed = threading.Event()
 
-        def _slow(s: Any, p: ProgressPublisher, msf: Any) -> None:  # noqa: ARG001
-            _slow_noop(s, p, msf, started=started, proceed=proceed)
+        def _slow(
+            s: Any,
+            p: ProgressPublisher,
+            msf: Any,
+            *,
+            job_id: str,  # noqa: ARG001
+        ) -> None:
+            _slow_noop(s, p, msf, job_id=job_id, started=started, proceed=proceed)
 
         with patch("blackvuesync.server.sync_runner._do_sync", side_effect=_slow):
             result1 = trigger_sync(settings, pub)
@@ -114,8 +125,14 @@ class TestTriggerSync:
         started = threading.Event()
         proceed = threading.Event()
 
-        def _slow(s: Any, p: ProgressPublisher, msf: Any) -> None:  # noqa: ARG001
-            _slow_noop(s, p, msf, started=started, proceed=proceed)
+        def _slow(
+            s: Any,
+            p: ProgressPublisher,
+            msf: Any,
+            *,
+            job_id: str,  # noqa: ARG001
+        ) -> None:
+            _slow_noop(s, p, msf, job_id=job_id, started=started, proceed=proceed)
 
         with patch("blackvuesync.server.sync_runner._do_sync", side_effect=_slow):
             result1 = trigger_sync(settings, pub)
@@ -131,7 +148,14 @@ class TestTriggerSync:
         pub = ProgressPublisher()
         settings = _make_settings()
 
-        def _fast(_s: Any, p: ProgressPublisher, _msf: Any) -> None:  # noqa: ARG001
+        def _fast(
+            _s: Any,
+            p: ProgressPublisher,
+            _msf: Any,
+            *,
+            job_id: str,  # noqa: ARG001
+        ) -> None:
+            p.begin_job(0, job_id=job_id)
             time.sleep(0.05)
             p.end_job(success=True)
 
@@ -154,7 +178,14 @@ class TestTriggerSync:
         thread_ref: list[threading.Thread] = []
         proceed = threading.Event()
 
-        def _record(_s: Any, p: ProgressPublisher, _msf: Any) -> None:  # noqa: ARG001
+        def _record(
+            _s: Any,
+            p: ProgressPublisher,
+            _msf: Any,
+            *,
+            job_id: str,  # noqa: ARG001
+        ) -> None:
+            p.begin_job(0, job_id=job_id)
             thread_ref.append(threading.current_thread())
             proceed.wait(timeout=5.0)
             p.end_job(success=True)

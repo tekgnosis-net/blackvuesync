@@ -9,7 +9,7 @@ from collections.abc import Iterator
 from flask import Blueprint, Response, current_app, stream_with_context
 
 from blackvuesync.server.auth import login_required
-from blackvuesync.server.progress import ProgressPublisher, SyncProgress
+from blackvuesync.server.progress import FileProgress, ProgressPublisher, SyncProgress
 from blackvuesync.server.sync_runner import trigger_sync
 
 # manual smoke test:
@@ -25,9 +25,26 @@ def _publisher() -> ProgressPublisher:
     return pub
 
 
+def _file_progress_to_dict(fp: FileProgress) -> dict[str, object]:
+    """converts a FileProgress snapshot to a dict, including computed properties."""
+    d: dict[str, object] = dataclasses.asdict(fp)
+    d["percent"] = fp.percent
+    d["elapsed_seconds"] = fp.elapsed_seconds
+    return d
+
+
 def _snap_to_dict(snap: SyncProgress) -> dict[str, object]:
-    """converts a SyncProgress snapshot to a JSON-serializable dict."""
-    return dataclasses.asdict(snap)
+    """converts a SyncProgress snapshot to a JSON-serializable dict.
+
+    includes computed properties (percent, elapsed_seconds) so the ui
+    does not need to recalculate them from raw fields.
+    """
+    d: dict[str, object] = dataclasses.asdict(snap)
+    d["percent"] = snap.percent
+    # replaces the nested current_file dict with one that also has computed props
+    if snap.current_file is not None:
+        d["current_file"] = _file_progress_to_dict(snap.current_file)
+    return d
 
 
 @api_sync_bp.route("/progress", methods=["GET"])

@@ -164,6 +164,24 @@ class TestProgressPublisherStateMachine:
         assert snap.current_file.total_bytes == 1024
         assert snap.current_file.state == "starting"
 
+    def test_start_file_with_direction_propagates_to_file_progress(self) -> None:
+        """start_file with a direction produces a FileProgress with that direction."""
+        pub = ProgressPublisher()
+        pub.begin_job(1)
+        pub.start_file("20230101_120000_NF.mp4", "mp4", 0, direction="F")
+        snap = pub.snapshot()
+        assert snap.current_file is not None
+        assert snap.current_file.direction == "F"
+
+    def test_start_file_without_direction_leaves_direction_none(self) -> None:
+        """start_file without direction results in direction=None on FileProgress."""
+        pub = ProgressPublisher()
+        pub.begin_job(1)
+        pub.start_file("20230101_120000_NF.3gf", "3gf", 0)
+        snap = pub.snapshot()
+        assert snap.current_file is not None
+        assert snap.current_file.direction is None
+
     def test_update_bytes_updates_current_file(self) -> None:
         pub = ProgressPublisher()
         pub.begin_job(1)
@@ -264,6 +282,95 @@ class TestPostCompleteRetention:
             time.sleep(0.3)
             # state should be running (or later), not idle from the old timer
             assert pub.snapshot().state != "idle"
+
+    def test_stale_retention_timer_does_not_reset_new_job(self) -> None:
+        """stale timer from job-1 must not reset state while job-2 is running.
+
+        regression test for the double end_job / leaked timer bug: with a very
+        short retention window, begin_job -> end_job -> begin_job (new job) ->
+        wait longer than the retention window -> state must still be running.
+        """
+        pub = ProgressPublisher()
+        with patch.object(ProgressPublisher, "POST_COMPLETE_RETENTION", 0.1):
+            pub.begin_job(1)
+            pub.end_job(success=True)
+            # immediately start a second job; begin_job must cancel the timer
+            pub.begin_job(1)
+            # wait well past what the first timer would have fired
+            time.sleep(0.25)
+            # the second job is still running; must not have been reset to idle
+            assert pub.snapshot().state == "running"
+
+
+# ---------------------------------------------------------------------------
+# ProgressPublisher -- lock not held across yield
+# ---------------------------------------------------------------------------
+
+
+class TestSubscribeLockBehavior:
+    """tests that subscribe() does not hold the lock while yielded."""
+
+    def test_update_bytes_completes_quickly_while_subscriber_suspended_at_heartbeat(
+        self,
+    ) -> None:
+        """update_bytes must complete within 50 ms even when a subscriber is
+        suspended mid-heartbeat (i.e. the lock must not be held at the yield
+        inside the heartbeat path).
+
+        this is a regression test for the 'yield inside with self._lock' bug.
+        the test forces the heartbeat branch by patching queue.Queue.get so it
+        raises queue.Empty, then parks the consumer thread before it calls
+        next(). with the fix the sync thread's update_bytes finishes quickly
+        because the lock is not held across the yield.
+        """
+        import queue as _queue  # pylint: disable=import-outside-toplevel
+        from collections.abc import Generator  # pylint: disable=import-outside-toplevel
+
+        pub = ProgressPublisher()
+        pub.begin_job(1)
+        pub.start_file("a.mp4", "mp4", 10_000)
+
+        consumer_at_yield = threading.Event()
+        let_consumer_continue = threading.Event()
+
+        def _patched_get(
+            _self: _queue.Queue[SyncProgress],
+            *_args: object,
+            **_kwargs: object,
+        ) -> SyncProgress:
+            """always raise Empty to force the heartbeat path in subscribe()."""
+            raise _queue.Empty
+
+        # subscribe() returns an Iterator; cast to Generator so we can call .close()
+        gen: Generator[SyncProgress, None, None] = pub.subscribe()  # type: ignore[assignment]
+        # consume the initial snapshot; generator is now parked at q.get()
+        next(gen)
+
+        def _consumer() -> None:
+            """forces the heartbeat branch, then signals before consuming the snap."""
+            with patch("queue.Queue.get", _patched_get):
+                # next() triggers the heartbeat branch: lock acquired, snap taken,
+                # lock released, then yield. with the bug the lock is held at yield.
+                consumer_at_yield.set()
+                snap = next(gen)  # noqa: F841  # pylint: disable=unused-variable
+            let_consumer_continue.set()
+
+        t = threading.Thread(target=_consumer, daemon=True)
+        t.start()
+        consumer_at_yield.wait(timeout=2.0)
+        # small pause to let the consumer thread enter next() and reach the yield
+        time.sleep(0.01)
+
+        # update_bytes must not block waiting for the consumer to call next()
+        start = time.monotonic()
+        pub.update_bytes(5_000)
+        elapsed = time.monotonic() - start
+
+        let_consumer_continue.set()
+        t.join(timeout=2.0)
+        gen.close()
+
+        assert elapsed < 0.05, f"update_bytes blocked for {elapsed:.3f}s"
 
 
 # ---------------------------------------------------------------------------
