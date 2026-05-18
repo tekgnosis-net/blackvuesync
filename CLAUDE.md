@@ -163,6 +163,15 @@ application, structured as follows:
   while `auth.password_hash == ""` (sticky first-run flow).
 - `routes/ui.py` -- Placeholder `GET` routes for `/`, `/settings`, `/logs`,
   `/stats`, `/viewer`; all protected by `@login_required`.
+- `routes/api_sync.py` -- JSON API routes at `/api/sync/*`; see "Sync API"
+  subsection below.
+- `routes/hx_sync.py` -- HTMX fragment routes at `/hx/sync/*`; renders
+  `_partials/sync_status_card.html` and `_partials/last_run_card.html`.
+- `progress.py` -- `FileProgress` / `SyncProgress` frozen dataclasses and
+  `ProgressPublisher`; see "Progress Publisher" subsection below.
+- `sync_runner.py` -- thin wrapper that spawns `sync.sync()` on a daemon
+  thread guarded by a module-level `threading.Lock`; surfaces a 409 when a
+  sync is already running.
 
 **Auth modes** (set via `settings.json` `auth.mode`):
 
@@ -175,6 +184,62 @@ application, structured as follows:
 **Argon2 parameters are locked**: `time_cost=3, memory_cost=65536,
 parallelism=4, hash_len=32, salt_len=16`. Do not change without a migration
 plan.
+
+### Progress Publisher
+
+`ProgressPublisher` (in `server/progress.py`) owns the thread-safe sync
+progress state. It is instantiated once per server process in `cmd_serve` and
+attached to the Flask app as `app.progress_publisher`.
+
+**Writer API** (called from the sync thread):
+
+| Method | Description |
+| --- | --- |
+| `begin_job(files_total) -> str` | starts a job; returns `job_id` (uuid4 hex) |
+| `start_file(filename, artifact, total_bytes)` | marks start of a file download |
+| `update_bytes(downloaded, total_bytes=0)` | progress tick; throttled to 5 Hz for subscribers |
+| `finish_file(success, reason=None)` | closes a file; bumps aggregate counts |
+| `end_job(success)` | closes the job; retained for 10 s, then resets to idle |
+
+**Reader API** (called from Flask handlers):
+
+| Method | Description |
+| --- | --- |
+| `snapshot() -> SyncProgress` | returns current frozen state; safe from any thread |
+| `subscribe() -> Iterator[SyncProgress]` | yields state changes; 30-second heartbeat timeout |
+
+State transitions: `idle → running → complete/failed → idle`.
+`SyncProgress` and `FileProgress` are frozen dataclasses; mutations use
+`dataclasses.replace`. The `_NoopPublisher` sentinel is used in the CLI sync
+path so `sync.py` stays free of Flask imports.
+
+### Sync API
+
+Sync-related endpoints are split between JSON API and HTMX fragments:
+
+**JSON API** (`/api/sync/*`, all `@login_required`):
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/api/sync/progress` | current snapshot as JSON |
+| `GET` | `/api/sync/progress/stream` | SSE stream of progress events |
+| `POST` | `/api/sync/now` | trigger an on-demand sync |
+| `GET` | `/api/sync/last` | last completed snapshot; 204 if never run |
+
+`POST /api/sync/now` is CSRF-protected globally by Flask-WTF. It returns
+202 + `{"job_id": ...}` or 409 + `{"code": "SYNC_ALREADY_RUNNING", ...}`.
+
+The SSE stream emits `event: progress\ndata: <json>\n\n` frames, throttled
+to 5 Hz. When no state change occurs for 30 seconds the generator emits
+`": keepalive"` instead of a redundant data frame. Set `X-Accel-Buffering: no`
+to prevent nginx-family proxy buffering.
+
+**HTMX Fragments** (`/hx/sync/*`, all `@login_required`):
+
+| Method | Path | Template |
+| --- | --- | --- |
+| `GET` | `/hx/sync/status-card` | `_partials/sync_status_card.html` |
+| `GET` | `/hx/sync/last-run-card` | `_partials/last_run_card.html` |
 
 ### Logging
 
@@ -195,6 +260,12 @@ Two logger hierarchies:
 - `test/test_routes_health.py` -- tests for /healthz and /readyz
 - `test/test_routes_ui.py` -- tests for authenticated UI placeholder routes
 - `test/test_security_headers.py` -- tests for CSP and other security headers
+- `test/test_progress.py` -- unit tests for `FileProgress`, `SyncProgress`,
+  `ProgressPublisher` state machine, throttle, retention, concurrency
+- `test/test_sync_callback.py` -- tests for `download_file` `on_chunk` callback
+- `test/test_sync_runner.py` -- tests for `trigger_sync` locking and daemon thread
+- `test/test_routes_api_sync.py` -- tests for `/api/sync/*` endpoints and SSE
+- `test/test_routes_hx_sync.py` -- tests for `/hx/sync/*` htmx fragment endpoints
 - `features/` -- Behave BDD integration tests against a mock BlackVue dashcam
 
 ### Running Tests
