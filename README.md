@@ -236,6 +236,50 @@ Example:
 
 ![openmediavault Scheduled Job](https://raw.githubusercontent.com/tekgnosis-net/blackvuesync/main/docs/images/cron-example-openmediavault.png)
 
+#### Web UI
+
+BlackVue Sync ships a built-in web interface accessible at
+`http://host:8080/` when running under Docker (or via `blackvuesync serve`).
+
+##### First-Run Wizard
+
+On the very first visit (or any time `auth.password_hash` is empty), the
+browser is redirected to `/first-run`. Enter a password of at least 12
+characters to complete setup. The hash (Argon2id) is stored in
+`/config/settings.json` and the redirect disappears.
+
+##### Auth Modes
+
+Three authentication modes are available via `settings.json`:
+
+| Mode | Behavior |
+| --- | --- |
+| `login` | Password authentication (default). Session cookie valid for the configured lifetime. |
+| `none` | No authentication required. Suitable for trusted LAN access where no admin password is desired. |
+| `proxy` | A reverse proxy handles authentication. BlackVue Sync trusts the forwarded identity. |
+
+To change the mode, edit `auth.mode` in `/config/settings.json`. The change
+takes effect on the next request without a restart.
+
+##### Reverse Proxy (Caddy Example)
+
+```caddyfile
+blackvuesync.example.net {
+    reverse_proxy localhost:8080
+}
+```
+
+Set `BLACKVUESYNC_TRUST_PROXY=1` in the container environment (or process
+environment) when deploying behind an HTTPS reverse proxy. This enables
+`SESSION_COOKIE_SECURE` so the session cookie is only transmitted over HTTPS
+connections. Leave it unset for local HTTP development.
+
+##### Recovery
+
+If you lose access to the admin password, set `auth.password_hash` to `""`
+in `/config/settings.json` and restart the container (or the `serve` process).
+The first-run wizard will prompt for a new password.
+
 #### Docker
 
 ##### Overview

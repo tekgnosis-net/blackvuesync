@@ -67,12 +67,22 @@ repos:
     rev: v1.14.1
     hooks:
       - id: mypy
+        additional_dependencies:
+          - flask~=3.1
+          - flask-wtf~=1.2
+          - waitress~=3.0
+          - argon2-cffi~=23.1
 
   - repo: https://github.com/pycqa/pylint
     rev: v3.3.9
     hooks:
       - id: pylint
         files: ^blackvuesync/.*\.py$
+        additional_dependencies:
+          - flask~=3.1
+          - flask-wtf~=1.2
+          - waitress~=3.0
+          - argon2-cffi~=23.1
 
   - repo: https://github.com/sirosen/texthooks
     rev: 0.7.1

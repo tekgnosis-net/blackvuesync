@@ -22,7 +22,12 @@ classifiers = [
     "Typing :: Typed",
 ]
 
-dependencies = []
+dependencies = [
+    "Flask~=3.1",
+    "Flask-WTF~=1.2",
+    "waitress~=3.0",
+    "argon2-cffi~=23.1",
+]
 
 [project.scripts]
 blackvuesync = "blackvuesync.__main__:main"
@@ -32,13 +37,14 @@ blackvuesync = "blackvuesync.__main__:main"
 dev = [
     "behave~=1.2",
     "black~=25.11",
-    "Flask~=3.1",
+    "freezegun~=1.5",
     "mypy~=1.14",
     "pre-commit~=4.3",
     "PyHamcrest~=2.1",
     "pylint~=3.3",
     "pytest~=8.3",
     "pytest-cov~=7.0",
+    "pytest-flask~=1.3",
     "python-lsp-server~=1.14",
     "requests~=2.32",
     "ruff~=0.9",
@@ -56,7 +62,13 @@ requires = ["setuptools>=58.0.4"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["blackvuesync", "blackvuesync.server"]
+packages = ["blackvuesync", "blackvuesync.server", "blackvuesync.server.routes"]
+
+[tool.setuptools.package-data]
+"blackvuesync.server" = [
+    "templates/**/*.html",
+    "static/**/*",
+]
 
 [tool.black]
 line-length = 88
@@ -95,7 +107,7 @@ exclude = ["venv/", "build/", "dist/"]
 
 # ignores third-party packages without type stubs
 [[tool.mypy.overrides]]
-module = ["requests", "hamcrest", "testcontainers.*", "tzlocal"]
+module = ["requests", "hamcrest", "testcontainers.*", "tzlocal", "flask_wtf.*", "waitress", "freezegun"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
@@ -125,6 +137,14 @@ disallow_untyped_decorators = false
 [[tool.mypy.overrides]]
 module = "features.mock_dashcam.server"
 warn_return_any = false
+
+[[tool.mypy.overrides]]
+module = ["test_auth", "test_routes_auth", "test_routes_health", "test_routes_ui", "test_security_headers"]
+disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
+module = ["blackvuesync.server.routes.*", "blackvuesync.server.routes.auth", "blackvuesync.server.routes.health", "blackvuesync.server.routes.ui"]
+disallow_untyped_decorators = false
 
 [tool.coverage.run]
 # uses parallel mode to create separate coverage files that can be combined

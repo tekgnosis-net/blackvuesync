@@ -29,6 +29,12 @@ _CRON_FIELD_RE_PATTERN = r"^[0-9*/,\-]+$"
 # valid skip-metadata type codes
 _VALID_SKIP_METADATA = frozenset(("t", "3", "g"))
 
+# valid Literal field values for member-check validation
+_VALID_PRIORITIES = frozenset(("date", "rdate", "type"))
+_VALID_GROUPINGS = frozenset(("none", "daily", "weekly", "monthly", "yearly"))
+_VALID_LOG_FORMATS = frozenset(("text", "json"))
+_VALID_AUTH_MODES = frozenset(("login", "none", "proxy"))
+
 
 def _valid_duration(value: str) -> bool:
     """returns True if value matches the duration grammar used by blackvuesync."""
@@ -106,6 +112,16 @@ class SyncSettings:
     def validate(self) -> list[str]:
         """validates sync settings; returns a list of error strings."""
         errors: list[str] = []
+        if self.priority not in _VALID_PRIORITIES:
+            errors.append(
+                f"sync.priority must be one of {sorted(_VALID_PRIORITIES)!r}, "
+                f"got {self.priority!r}"
+            )
+        if self.grouping not in _VALID_GROUPINGS:
+            errors.append(
+                f"sync.grouping must be one of {sorted(_VALID_GROUPINGS)!r}, "
+                f"got {self.grouping!r}"
+            )
         if not _valid_duration(self.retry_failed_after):
             errors.append(
                 f"sync.retry_failed_after is not a valid duration: "
@@ -154,6 +170,11 @@ class LoggingSettings:
     def validate(self) -> list[str]:
         """validates logging settings; returns a list of error strings."""
         errors: list[str] = []
+        if self.format not in _VALID_LOG_FORMATS:
+            errors.append(
+                f"logging.format must be one of {sorted(_VALID_LOG_FORMATS)!r}, "
+                f"got {self.format!r}"
+            )
         if self.verbose < 0:
             errors.append("logging.verbose must be >= 0")
         if self.file_max_bytes <= 0:
@@ -217,6 +238,11 @@ class AuthSettings:
     def validate(self) -> list[str]:
         """validates auth settings; returns a list of error strings."""
         errors: list[str] = []
+        if self.mode not in _VALID_AUTH_MODES:
+            errors.append(
+                f"auth.mode must be one of {sorted(_VALID_AUTH_MODES)!r}, "
+                f"got {self.mode!r}"
+            )
         if self.mode == "proxy":
             if not self.trusted_proxies:
                 errors.append(
@@ -319,18 +345,10 @@ def _section_to_dict(section: object) -> dict[str, Any]:
 
 def _settings_to_dict(settings: Settings) -> dict[str, Any]:
     """converts a Settings object to a JSON-serializable dict."""
-    return {
-        "version": settings.version,
-        "connection": _section_to_dict(settings.connection),
-        "schedule": _section_to_dict(settings.schedule),
-        "sync": _section_to_dict(settings.sync),
-        "retention": _section_to_dict(settings.retention),
-        "logging": _section_to_dict(settings.logging),
-        "metrics": _section_to_dict(settings.metrics),
-        "web": _section_to_dict(settings.web),
-        "auth": _section_to_dict(settings.auth),
-        "system": _section_to_dict(settings.system),
-    }
+    result: dict[str, Any] = {"version": settings.version}
+    for section_name in _SECTION_FIELDS:
+        result[section_name] = _section_to_dict(getattr(settings, section_name))
+    return result
 
 
 def _section_from_dict(cls: type, raw: dict[str, Any], tuple_fields: set[str]) -> Any:
@@ -416,7 +434,10 @@ class SettingsStore:
                 raise ValidationError(errors)
             self._save(new)
             self._settings = new
-        for listener in list(self._listeners):
+        # snapshots the listeners list so a callback that registers a new
+        # listener (via on_change()) cannot mutate the list mid-iteration.
+        # (suppresses S7504.)
+        for listener in list(self._listeners):  # NOSONAR
             try:
                 listener(old, new)
             except Exception:  # pylint: disable=broad-exception-caught
@@ -477,7 +498,10 @@ class SettingsStore:
         version = raw.get("version", 1)
         if version < SCHEMA_VERSION:
             raw = migrate(raw, version)
-        return _settings_from_dict(raw)
+        settings = _settings_from_dict(raw)
+        for error in settings.validate():
+            logger.warning("settings validation error: %s", error)
+        return settings
 
     def _bootstrap_from_env(self) -> Settings:  # pylint: disable=too-many-locals
         """builds initial settings from environment variables on first run."""

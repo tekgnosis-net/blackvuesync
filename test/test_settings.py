@@ -915,3 +915,63 @@ def test_store_concurrent_updates_are_safe(settings_path: Path) -> None:
     final_port = store.get().web.port
     # should be > 8080 and within valid range
     assert 8080 < final_port <= 65535
+
+
+# ---------------------------------------------------------------------------
+# C1: Literal field validators (Phase C cleanup)
+# ---------------------------------------------------------------------------
+
+
+def test_sync_validate_invalid_priority() -> None:
+    """verifies invalid priority value is rejected."""
+    s = SyncSettings(priority="newest")  # type: ignore[arg-type]
+    errors = s.validate()
+    assert any("priority" in e for e in errors)
+
+
+def test_sync_validate_invalid_grouping() -> None:
+    """verifies invalid grouping value is rejected."""
+    s = SyncSettings(grouping="hourly")  # type: ignore[arg-type]
+    errors = s.validate()
+    assert any("grouping" in e for e in errors)
+
+
+def test_logging_validate_invalid_format() -> None:
+    """verifies invalid logging format value is rejected."""
+    s = LoggingSettings(format="yaml")  # type: ignore[arg-type]
+    errors = s.validate()
+    assert any("format" in e for e in errors)
+
+
+def test_auth_validate_invalid_mode() -> None:
+    """verifies invalid auth mode value is rejected."""
+    s = AuthSettings(mode="basic")  # type: ignore[arg-type]
+    errors = s.validate()
+    assert any("mode" in e for e in errors)
+
+
+# ---------------------------------------------------------------------------
+# C2: Validation errors logged on load (Phase C cleanup)
+# ---------------------------------------------------------------------------
+
+
+def test_load_logs_validation_errors(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """verifies settings with invalid fields emit WARNING log entries on load."""
+    import logging
+
+    settings_path = tmp_path / "settings.json"
+    raw: dict[str, Any] = {
+        "version": 1,
+        "sync": {"priority": "invalid_priority"},
+    }
+    fd = os.open(str(settings_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        json.dump(raw, f)
+
+    with caplog.at_level(logging.WARNING, logger="blackvuesync.settings"):
+        SettingsStore(settings_path)
+
+    messages = [r.message for r in caplog.records]
+    assert any("priority" in m for m in messages)
