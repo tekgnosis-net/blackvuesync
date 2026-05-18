@@ -62,7 +62,13 @@ requires = ["setuptools>=58.0.4"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-packages = ["blackvuesync", "blackvuesync.server"]
+packages = ["blackvuesync", "blackvuesync.server", "blackvuesync.server.routes"]
+
+[tool.setuptools.package-data]
+"blackvuesync.server" = [
+    "templates/**/*.html",
+    "static/**/*",
+]
 
 [tool.black]
 line-length = 88
@@ -101,7 +107,7 @@ exclude = ["venv/", "build/", "dist/"]
 
 # ignores third-party packages without type stubs
 [[tool.mypy.overrides]]
-module = ["requests", "hamcrest", "testcontainers.*", "tzlocal"]
+module = ["requests", "hamcrest", "testcontainers.*", "tzlocal", "flask_wtf.*", "waitress", "freezegun"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
@@ -131,6 +137,14 @@ disallow_untyped_decorators = false
 [[tool.mypy.overrides]]
 module = "features.mock_dashcam.server"
 warn_return_any = false
+
+[[tool.mypy.overrides]]
+module = ["test_auth", "test_routes_auth", "test_routes_health", "test_routes_ui", "test_security_headers"]
+disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
+module = ["blackvuesync.server.routes.*", "blackvuesync.server.routes.auth", "blackvuesync.server.routes.health", "blackvuesync.server.routes.ui"]
+disallow_untyped_decorators = false
 
 [tool.coverage.run]
 # uses parallel mode to create separate coverage files that can be combined

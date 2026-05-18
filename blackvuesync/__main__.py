@@ -69,22 +69,23 @@ def _try_load_settings_store(path: Path) -> SettingsStore | None:
         return None
 
 
-def parse_args() -> argparse.Namespace:
-    """parses the command-line arguments"""
-    arg_parser = argparse.ArgumentParser(
+def _build_sync_parser(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[type-arg]
+    """adds sync subcommand arguments to subparsers."""
+    sync_parser = subparsers.add_parser(
+        "sync",
+        help="sync recordings from a dashcam to a local directory",
         description="Synchronizes BlackVue dashcam recordings with a local directory.",
-        epilog="Bug reports: https://github.com/tekgnosis-net/blackvuesync/issues",
     )
-    arg_parser.add_argument(
+    sync_parser.add_argument(
         "address", metavar="ADDRESS", help="dashcam IP address or name"
     )
-    arg_parser.add_argument(
+    sync_parser.add_argument(
         "-d",
         "--destination",
         metavar="DEST",
         help="sets the destination directory to DEST; defaults to the current directory",
     )
-    arg_parser.add_argument(
+    sync_parser.add_argument(
         "-g",
         "--grouping",
         metavar="GROUPING",
@@ -92,13 +93,13 @@ def parse_args() -> argparse.Namespace:
         choices=["none", "daily", "weekly", "monthly", "yearly"],
         help="groups recording by day, week, month or year under a directory named after the date; so respectively 2019-06-15, 2019-06-09 (Mon), 2019-07 or 2019; defaults to none, indicating no grouping",
     )
-    arg_parser.add_argument(
+    sync_parser.add_argument(
         "-k",
         "--keep",
         metavar="KEEP_RANGE",
-        help="""keeps recordings in the given range, removing the rest; defaults to days, but can suffix with d, w for days or weeks respectively""",
+        help="keeps recordings in the given range, removing the rest; defaults to days, but can suffix with d, w for days or weeks respectively",
     )
-    arg_parser.add_argument(
+    sync_parser.add_argument(
         "-p",
         "--priority",
         metavar="DOWNLOAD_PRIORITY",
@@ -106,26 +107,21 @@ def parse_args() -> argparse.Namespace:
         choices=["date", "rdate", "type"],
         help="sets the recording download priority; date: downloads in chronological order from oldest to newest; rdate: downloads in chronological order from newest to oldest; type: prioritizes manual, event, normal and then parkingrecordings; defaults to date",
     )
-    arg_parser.add_argument(
+    sync_parser.add_argument(
         "-i",
         "--include",
         default=None,
         type=parse_filter,
-        help="downloads only recordings matching the given codes; each code"
-        " is a recording type optionally followed by a camera direction;"
-        " e.g. --include P,NF downloads all Parking and Normal Front"
-        " recordings",
+        help="downloads only recordings matching the given codes; each code is a recording type optionally followed by a camera direction; e.g. --include P,NF downloads all Parking and Normal Front recordings",
     )
-    arg_parser.add_argument(
+    sync_parser.add_argument(
         "-e",
         "--exclude",
         default=None,
         type=parse_filter,
-        help="excludes recordings matching the given codes; takes priority"
-        " over --include; e.g. --include N,E --exclude NR downloads all"
-        " Normal and Event recordings except Normal Rear",
+        help="excludes recordings matching the given codes; takes priority over --include; e.g. --include N,E --exclude NR downloads all Normal and Event recordings except Normal Rear",
     )
-    arg_parser.add_argument(
+    sync_parser.add_argument(
         "-u",
         "--max-used-disk",
         metavar="DISK_USAGE_PERCENT",
@@ -134,7 +130,7 @@ def parse_args() -> argparse.Namespace:
         choices=range(5, 99),
         help="stops downloading recordings if disk is over DISK_USAGE_PERCENT used; defaults to 90",
     )
-    arg_parser.add_argument(
+    sync_parser.add_argument(
         "-t",
         "--timeout",
         metavar="TIMEOUT",
@@ -142,75 +138,118 @@ def parse_args() -> argparse.Namespace:
         type=float,
         help="sets the connection timeout in seconds (float); defaults to 10.0 seconds",
     )
-    arg_parser.add_argument(
+    sync_parser.add_argument(
         "--retry-failed-after",
         metavar="DURATION",
         default="1d",
         help="waits at least the given duration before retrying a failed download; defaults to days, but can suffix with s, h, d, w for seconds, hours, days or weeks respectively; defaults to 1d",
     )
-    arg_parser.add_argument(
+    sync_parser.add_argument(
         "--skip-metadata",
         metavar="TYPES",
         default=set(),
         type=parse_skip_metadata,
-        help="skips downloading metadata file types; t=thumbnail (.thm),"
-        " 3=accelerometer (.3gf), g=gps (.gps); e.g. --skip-metadata t3g"
-        " skips all metadata files",
+        help="skips downloading metadata file types; t=thumbnail (.thm), 3=accelerometer (.3gf), g=gps (.gps); e.g. --skip-metadata t3g skips all metadata files",
     )
-    arg_parser.add_argument(
+    sync_parser.add_argument(
         "-v", "--verbose", action="count", default=0, help="increases verbosity"
     )
-    arg_parser.add_argument(
+    sync_parser.add_argument(
         "-q",
         "--quiet",
         action="store_true",
         help="quiets down output messages; overrides verbosity options",
     )
-    arg_parser.add_argument(
+    sync_parser.add_argument(
         "--log-format",
         default="text",
         choices=LOG_FORMATS,
         help="sets log output format; defaults to text",
     )
-    arg_parser.add_argument(
+    sync_parser.add_argument(
         "--metrics-file",
         metavar="PATH",
         help="writes Prometheus metrics text format to PATH",
     )
-    arg_parser.add_argument(
+    sync_parser.add_argument(
         "--metrics-pushgateway-url",
         metavar="URL",
         type=parse_pushgateway_url,
         help="pushes Prometheus metrics to the Pushgateway URL",
     )
-    arg_parser.add_argument(
+    sync_parser.add_argument(
         "--metrics-job",
         metavar="NAME",
         default=METRICS_DEFAULT_JOB,
         help=f"sets the Pushgateway metrics job; defaults to {METRICS_DEFAULT_JOB}",
     )
-    arg_parser.add_argument(
+    sync_parser.add_argument(
         "--metrics-instance",
         metavar="NAME",
         help="sets the Pushgateway metrics instance; defaults to ADDRESS",
     )
-    arg_parser.add_argument(
+    sync_parser.add_argument(
         "--metrics-state-file",
         metavar="PATH",
         help="persists cross-run metrics state at PATH",
     )
-    arg_parser.add_argument(
+    sync_parser.add_argument(
         "--cron",
         action="store_true",
         help="cron mode, only logs normal recordings at default verbosity",
     )
-    arg_parser.add_argument(
+    sync_parser.add_argument(
         "--dry-run", action="store_true", help="shows what the program would do"
     )
-    arg_parser.add_argument(
+    sync_parser.add_argument(
         "--affinity-key",
         metavar="AFFINITY_KEY",
         help="affinity key; reserved for test isolation",
+    )
+
+
+def _build_serve_parser(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[type-arg]
+    """adds serve subcommand arguments to subparsers."""
+    serve_parser = subparsers.add_parser(
+        "serve",
+        help="start the web server",
+        description="Starts the BlackVue Sync web server.",
+    )
+    serve_parser.add_argument(
+        "--port",
+        metavar="PORT",
+        type=int,
+        default=None,
+        help="overrides the port from settings.json; defaults to settings.web.port (8080)",
+    )
+    serve_parser.add_argument(
+        "--config-path",
+        metavar="PATH",
+        default=None,
+        help="path to settings.json; overrides BLACKVUESYNC_CONFIG_PATH env var",
+    )
+
+
+def parse_args() -> argparse.Namespace:
+    """parses the command-line arguments, dispatching to sync or serve subcommands.
+
+    for backward compatibility, if the first argument is not a known
+    subcommand, the entire argv is treated as sync-mode arguments.
+    """
+    # detects legacy invocation: first arg is an IP address or hostname, not a
+    # subcommand name. rewrites sys.argv so the subparsers handle it uniformly.
+    known_subcommands = {"sync", "serve"}
+    if (
+        len(sys.argv) > 1
+        and sys.argv[1] not in known_subcommands
+        and not sys.argv[1].startswith("-")
+    ):
+        # inserts "sync" before the positional ADDRESS argument
+        sys.argv = [sys.argv[0], "sync"] + sys.argv[1:]
+
+    arg_parser = argparse.ArgumentParser(
+        description="Synchronizes BlackVue dashcam recordings with a local directory.",
+        epilog="Bug reports: https://github.com/tekgnosis-net/blackvuesync/issues",
     )
     arg_parser.add_argument(
         "--version",
@@ -220,18 +259,16 @@ def parse_args() -> argparse.Namespace:
         help="shows the version and exits",
     )
 
+    subparsers = arg_parser.add_subparsers(dest="subcommand")
+    _build_sync_parser(subparsers)
+    _build_serve_parser(subparsers)
+
     return arg_parser.parse_args()
 
 
-def main() -> int:
+def _run_sync(args: argparse.Namespace) -> int:
     """runs the sync workflow and returns the exit code."""
     # pylint: disable=too-many-branches,too-many-statements
-
-    # loads or bootstraps persistent settings (env vars seed the file on first
-    # run; subsequent runs read the file). cli args override for diagnostics.
-    _try_load_settings_store(_DEFAULT_SETTINGS_PATH)
-
-    args = parse_args()
 
     configure_logging(args.log_format)
     set_logging_levels(-1 if args.quiet else args.verbose, args.cron)
@@ -377,6 +414,46 @@ def main() -> int:
         flush_logs()
 
     return exit_code
+
+
+def _run_serve(args: argparse.Namespace) -> int:
+    """starts the web server and blocks until interrupted."""
+    # deferred imports keep these optional at module load time; the sync
+    # subcommand does not need flask or waitress.
+    # pylint: disable=import-outside-toplevel
+    import waitress
+
+    from blackvuesync.server import create_app
+
+    # pylint: enable=import-outside-toplevel
+
+    config_path = Path(args.config_path) if args.config_path else _DEFAULT_SETTINGS_PATH
+    store = SettingsStore(config_path)
+    app = create_app(store)
+    settings = store.get()
+    port = args.port if args.port is not None else settings.web.port
+    logger.info("starting web server on 0.0.0.0:%d", port)
+    waitress.serve(app, host="0.0.0.0", port=port)
+    return 0
+
+
+def main() -> int:
+    """dispatches to sync or serve subcommand and returns the exit code."""
+    # loads or bootstraps persistent settings (env vars seed the file on first
+    # run; subsequent runs read the file). cli args override for diagnostics.
+    _try_load_settings_store(_DEFAULT_SETTINGS_PATH)
+
+    args = parse_args()
+
+    # subcommand may be absent when parse_args is monkey-patched in tests or
+    # when the argparse namespace is constructed manually; defaults to "sync".
+    subcommand = getattr(args, "subcommand", "sync")
+
+    if subcommand == "serve":
+        return _run_serve(args)
+
+    # defaults to sync when subcommand is "sync" or absent (legacy argv rewrite)
+    return _run_sync(args)
 
 
 if __name__ == "__main__":

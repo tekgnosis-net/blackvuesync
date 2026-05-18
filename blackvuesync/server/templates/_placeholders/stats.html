@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block title %}Stats -- BlackVue Sync{% endblock %}
+
+{% block content %}
+<div class="page-container">
+  <h1 class="page-heading">Stats</h1>
+  <p class="page-subtitle">coming in sub-project #5</p>
+
+  <div class="card placeholder-card">
+    <p class="placeholder-description">
+      the statistics page will display Prometheus metrics in charts,
+      including sync duration, bytes downloaded, error rates, and
+      historical trends from the SQLite time-series store.
+    </p>
+    <p class="placeholder-link">
+      design: <code>docs/plans/2026-05-18-web-foundation-design.md</code>
+    </p>
+  </div>
+
+  <p class="version-info">BlackVue Sync {{ version }}</p>
+</div>
+{% endblock %}
