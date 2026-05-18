@@ -266,7 +266,7 @@ def parse_args() -> argparse.Namespace:
     return arg_parser.parse_args()
 
 
-def _run_sync(args: argparse.Namespace) -> int:
+def cmd_sync(args: argparse.Namespace) -> int:
     """runs the sync workflow and returns the exit code."""
     # pylint: disable=too-many-branches,too-many-statements
 
@@ -416,7 +416,7 @@ def _run_sync(args: argparse.Namespace) -> int:
     return exit_code
 
 
-def _run_serve(args: argparse.Namespace) -> int:
+def cmd_serve(args: argparse.Namespace) -> int:
     """starts the web server and blocks until interrupted."""
     # deferred imports keep these optional at module load time; the sync
     # subcommand does not need flask or waitress.
@@ -452,10 +452,10 @@ def main() -> int:
     subcommand = getattr(args, "subcommand", "sync")
 
     if subcommand == "serve":
-        return _run_serve(args)
+        return cmd_serve(args)
 
     # defaults to sync when subcommand is "sync" or absent (legacy argv rewrite)
-    return _run_sync(args)
+    return cmd_sync(args)
 
 
 if __name__ == "__main__":
