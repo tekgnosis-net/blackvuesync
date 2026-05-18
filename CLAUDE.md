@@ -140,6 +140,42 @@ Recordings can be organized into date-based directories (`--grouping`):
 
 Grouping speeds up loading in BlackVue Viewer and keeps directories manageable.
 
+### Server Package
+
+The web server lives under `blackvuesync/server/`. It is a standard Flask
+application, structured as follows:
+
+- `__init__.py` -- `create_app(settings_store, testing=False)` factory.
+  Configures Flask-WTF CSRF protection, ProxyFix middleware, session cookie
+  settings, and attaches `settings_store` to the app instance. Registers the
+  three blueprints and adds the `add_security_headers` after-request hook that
+  injects CSP, X-Frame-Options, HSTS, and related headers on every response.
+- `auth.py` -- Argon2id password hashing helpers (`hash_password`,
+  `verify_password`, `needs_rehash`) and the `login_required` decorator.
+  Maintains an in-memory sliding-window rate limiter (10 failures per 600 s →
+  15-minute lockout) guarded by a `threading.Lock`. Auth mode is read fresh from
+  `current_app.settings_store` on every request, so a mode change takes effect
+  immediately without a restart.
+- `routes/health.py` -- `GET /healthz` (always 200) and `GET /readyz` (200 when
+  settings store is loaded, 503 while starting).
+- `routes/auth.py` -- `GET|POST /login`, `POST /logout`, `GET|POST /first-run`.
+  A `before_app_request` hook redirects every non-exempt path to `/first-run`
+  while `auth.password_hash == ""` (sticky first-run flow).
+- `routes/ui.py` -- Placeholder `GET` routes for `/`, `/settings`, `/logs`,
+  `/stats`, `/viewer`; all protected by `@login_required`.
+
+**Auth modes** (set via `settings.json` `auth.mode`):
+
+| Mode | Behavior |
+| --- | --- |
+| `login` | Password auth enforced; session cookie issued on success. |
+| `none` | All routes accessible without credentials (trusted-LAN use). |
+| `proxy` | Reverse proxy is expected to authenticate; request is trusted. |
+
+**Argon2 parameters are locked**: `time_cost=3, memory_cost=65536,
+parallelism=4, hash_len=32, salt_len=16`. Do not change without a migration
+plan.
+
 ### Logging
 
 Two logger hierarchies:
@@ -151,8 +187,15 @@ Two logger hierarchies:
 
 ### Test Structure
 
-- `test/blackvuesync_test.py`: Pytest-based unit tests for parsing, grouping, filtering
-- `features/`: Behave-based BDD integration tests that verify end-to-end functionality with a mock BlackVue dashcam server
+- `test/blackvuesync_test.py` -- Pytest unit tests for parsing, grouping, filtering
+- `test/test_settings.py` -- unit tests for SettingsStore (100% coverage target)
+- `test/test_auth.py` -- unit tests for Argon2 helpers and rate-limiter
+- `test/test_routes_auth.py` -- Flask test-client tests for /login, /logout,
+  /first-run (timing, rate-limit, CSRF)
+- `test/test_routes_health.py` -- tests for /healthz and /readyz
+- `test/test_routes_ui.py` -- tests for authenticated UI placeholder routes
+- `test/test_security_headers.py` -- tests for CSP and other security headers
+- `features/` -- Behave BDD integration tests against a mock BlackVue dashcam
 
 ### Running Tests
 
@@ -187,9 +230,15 @@ flags). Read it before changing anything under `features/`.
 
 Requires Python 3.9+ for modern type hints (`str | None`, walrus operator `:=`).
 
-### No External Dependencies
+### External Dependencies
 
-The script deliberately uses only Python standard library. When adding features, maintain this constraint for portability.
+`sync.py` and `metrics.py` use only the Python standard library -- this
+constraint must be maintained for portability (the cron-based sync path must
+work without pip-installed packages).
+
+The web server (`blackvuesync/server/`) depends on Flask, Flask-WTF, waitress,
+and argon2-cffi. These are listed as runtime dependencies in `pyproject.toml`
+and installed via `pip install -e ".[dev]"` in the development setup.
 
 ### Backwards Compatibility
 
@@ -208,5 +257,8 @@ The Docker image (`Dockerfile`):
 - Internal cron job runs every 15 minutes (see `crontab` file)
 - `entrypoint.sh` handles user switching and cron setup
 - `blackvuesync.sh` wrapper translates env vars to CLI args
+- `EXPOSE 8080` documents the web server port; map it in `docker-compose.yml`
+- `HEALTHCHECK` polls `GET /healthz` via Python `urllib.request` (no curl needed)
+- `/config` volume: mount a host directory here; `settings.json` is stored inside
 - `run.sh` is a local smoke-test that runs the published image against a real dashcam
   address with `DRY_RUN=1 RUN_ONCE=1` -- useful for sanity-checking image changes

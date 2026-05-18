@@ -4,9 +4,13 @@ services:
     image: ghcr.io/tekgnosis-net/blackvuesync
     container_name: blackvuesync
     restart: unless-stopped
+    ports:
+      - "8080:8080"
     volumes:
       # Recording download destination. Change only the part before the first colon.
       - /mnt/dashcam:/recordings:rw
+      # Settings storage (settings.json lives here). Change the host path as needed.
+      - ./config:/config:rw
     environment:
       # Dashcam address
       # ADDRESS: dashcam.example.net

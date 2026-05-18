@@ -45,4 +45,9 @@ RUN chmod +x /blackvuesync.sh
 COPY --chown=dashcam blackvuesync /app/blackvuesync
 ENV PYTHONPATH=/app
 
+EXPOSE 8080
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8080/healthz').read()" || exit 1
+
 ENTRYPOINT [ "/entrypoint.sh"]
