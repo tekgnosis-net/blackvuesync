@@ -1077,9 +1077,13 @@ def lock(destination: str) -> int:
     lf_flags = os.O_WRONLY | os.O_CREAT
     lf_mode = stat.S_IWUSR | stat.S_IWGRP | stat.S_IWOTH  # This is 0o222, i.e. 146
 
-    # Create lock file
-    # Regarding umask, see https://stackoverflow.com/a/15015748/832230
-    umask_original = os.umask(0)
+    # creates the lock file with mode 0o222 (world-writable, no read) so that
+    # cooperative fcntl.lockf() works across multiple user contexts on
+    # bare-metal deployments. the umask is cleared so the requested mode is
+    # not masked away (see https://stackoverflow.com/a/15015748/832230).
+    # phase g may tighten this to 0o600 once the deployment model is
+    # finalized; phase a preserves upstream behavior. (suppresses python:S2612.)
+    umask_original = os.umask(0)  # NOSONAR
 
     try:
         lf_fd = os.open(lf_path, lf_flags, lf_mode)
