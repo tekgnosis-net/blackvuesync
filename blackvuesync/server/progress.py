@@ -314,7 +314,9 @@ class ProgressPublisher:
 
     def _publish_to_subscribers(self, snapshot: SyncProgress) -> None:
         """puts snapshot in every subscriber queue; drops frames for slow consumers."""
-        for sub in list(self._subscribers):
+        # snapshot the subscriber set so a concurrent subscribe/unsubscribe
+        # cannot mutate the iteration target. (suppresses python:S7504.)
+        for sub in list(self._subscribers):  # NOSONAR
             with contextlib.suppress(queue.Full):
                 sub.put_nowait(snapshot)
 
@@ -326,13 +328,10 @@ class _NoopPublisher:
     conditional checks and stays free of flask imports.
     """
 
-    def begin_job(  # pylint: disable=unused-argument
-        self,
-        _files_total: int = 0,
-        job_id: str | None = None,  # noqa: ARG002
-    ) -> str:
-        """no-op begin_job; returns an empty string."""
-        return ""
+    def begin_job(self, files_total: int = 0, job_id: str | None = None) -> str:
+        """no-op begin_job; echoes the supplied job_id or empty string."""
+        del files_total  # accepted for api compatibility; ignored by noop
+        return job_id or ""
 
     def start_file(
         self,

@@ -23,7 +23,6 @@ _current_thread: threading.Thread | None = None
 def trigger_sync(
     settings: Any,
     publisher: ProgressPublisher,
-    metrics_state_file: str | None = None,
 ) -> dict[str, str]:
     """triggers a sync in a background daemon thread; returns a status dict.
 
@@ -49,7 +48,7 @@ def trigger_sync(
     def _run() -> None:
         """runs sync under the lock; releases lock in finally."""
         try:
-            _do_sync(settings, publisher, metrics_state_file, job_id=job_id)
+            _do_sync(settings, publisher, job_id=job_id)
         finally:
             with contextlib.suppress(Exception):
                 _sync_lock.release()
@@ -63,7 +62,6 @@ def trigger_sync(
 def _do_sync(  # pylint: disable=too-many-locals
     settings: Any,
     publisher: ProgressPublisher,
-    metrics_state_file: str | None,  # noqa: ARG001  # pylint: disable=unused-argument
     *,
     job_id: str,
 ) -> None:

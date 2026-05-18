@@ -18,6 +18,9 @@ from blackvuesync.server.sync_runner import trigger_sync
 
 api_sync_bp = Blueprint("api_sync_bp", __name__, url_prefix="/api/sync")
 
+# all sync api responses serialize SyncProgress / error envelopes as json.
+_MIME_JSON = "application/json"
+
 
 def _publisher() -> ProgressPublisher:
     """returns the app-level progress publisher."""
@@ -55,7 +58,7 @@ def progress_snapshot() -> Response:
     return Response(
         json.dumps(_snap_to_dict(snap), default=str),
         status=200,
-        mimetype="application/json",
+        mimetype=_MIME_JSON,
     )
 
 
@@ -112,10 +115,10 @@ def trigger_now() -> Response:
                 "details": {"current_job_id": result["job_id"]},
             }
         )
-        return Response(body, status=409, mimetype="application/json")
+        return Response(body, status=409, mimetype=_MIME_JSON)
 
     body = json.dumps({"job_id": result["job_id"]})
-    return Response(body, status=202, mimetype="application/json")
+    return Response(body, status=202, mimetype=_MIME_JSON)
 
 
 @api_sync_bp.route("/last", methods=["GET"])
@@ -126,7 +129,7 @@ def last_sync() -> Response:
     if snap.state == "idle":
         return Response(status=204)
     body = json.dumps(_snap_to_dict(snap), default=str)
-    return Response(body, status=200, mimetype="application/json")
+    return Response(body, status=200, mimetype=_MIME_JSON)
 
 
 __all__ = ["api_sync_bp"]
