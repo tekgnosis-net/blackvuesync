@@ -1,0 +1,25 @@
+<div class="card last-run-card" id="last-run-card">
+  <div class="card-header">
+    <h3 class="card-title">Last Sync Run</h3>
+  </div>
+  <div class="card-body">
+    {% if snap.state == "idle" %}
+      <p class="last-run-none">no completed sync recorded</p>
+    {% else %}
+      <dl class="last-run-details">
+        <dt>status</dt>
+        <dd>
+          <span class="badge badge-{{ snap.state }}">{{ snap.state }}</span>
+        </dd>
+        <dt>files downloaded</dt>
+        <dd>{{ snap.files_completed }}</dd>
+        {% if snap.files_failed > 0 %}
+          <dt>files failed</dt>
+          <dd>{{ snap.files_failed }}</dd>
+        {% endif %}
+        <dt>total downloaded</dt>
+        <dd>{{ snap.bytes_downloaded_total | filesizeformat }}</dd>
+      </dl>
+    {% endif %}
+  </div>
+</div>

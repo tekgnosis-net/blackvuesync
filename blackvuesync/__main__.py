@@ -424,12 +424,14 @@ def cmd_serve(args: argparse.Namespace) -> int:
     import waitress
 
     from blackvuesync.server import create_app
+    from blackvuesync.server.progress import ProgressPublisher
 
     # pylint: enable=import-outside-toplevel
 
     config_path = Path(args.config_path) if args.config_path else _DEFAULT_SETTINGS_PATH
     store = SettingsStore(config_path)
-    app = create_app(store)
+    publisher = ProgressPublisher()
+    app = create_app(store, progress_publisher=publisher)
     settings = store.get()
     port = args.port if args.port is not None else settings.web.port
     logger.info("starting web server on 0.0.0.0:%d", port)
