@@ -166,13 +166,19 @@ class ProgressPublisher:
             )
             self._force_publish(self._state)
 
-    def update_bytes(self, downloaded: int) -> None:
-        """updates downloaded byte count; throttled publish to subscribers."""
+    def update_bytes(self, downloaded: int, total_bytes: int = 0) -> None:
+        """updates downloaded byte count; throttled publish to subscribers.
+
+        if total_bytes is non-zero it overrides the value set by start_file,
+        which is useful when the caller only has content-length at the first
+        chunk arrival rather than at start_file time.
+        """
         now_m = time.monotonic()
         with self._lock:
             cf = self._state.current_file
             if cf is None:
                 return
+            effective_total = total_bytes if total_bytes > 0 else cf.total_bytes
             elapsed = now_m - cf.started_at_monotonic
             # exponential weighted moving average for bytes_per_second
             if elapsed > 0:
@@ -185,10 +191,11 @@ class ProgressPublisher:
                 )
             else:
                 new_bps = cf.bytes_per_second
-            remaining = cf.total_bytes - downloaded
+            remaining = effective_total - downloaded
             eta = remaining / new_bps if new_bps > 0 and remaining > 0 else None
             updated_file = dataclasses.replace(
                 cf,
+                total_bytes=effective_total,
                 downloaded_bytes=downloaded,
                 updated_at_monotonic=now_m,
                 bytes_per_second=new_bps,
@@ -328,7 +335,7 @@ class _NoopPublisher:
     ) -> None:
         """no-op start_file."""
 
-    def update_bytes(self, downloaded: int) -> None:
+    def update_bytes(self, downloaded: int, total_bytes: int = 0) -> None:
         """no-op update_bytes."""
 
     def finish_file(self, success: bool, reason: str | None = None) -> None:
