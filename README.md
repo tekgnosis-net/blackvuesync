@@ -20,7 +20,7 @@ A typical setup would be a periodic cron job or a Docker container running on a 
 
 * **Portable runtimes:**
   * A [single, self-contained Python script](https://github.com/tekgnosis-net/blackvuesync/blob/main/blackvuesync.py) with no third-party dependencies. It can be copied and run anywhere, either [manually](#manual-usage) or [periodically](#unattended-usage).
-  * A [docker image](#docker) that runs periodically via an internal cron job. Supports amd64 (Intel), arm64 (Apple Silicon, Raspberry Pi 4+) and armv7 (Raspberry Pi 2/3).
+  * A [docker image](#docker) that runs a long-running web service with an internal scheduler. Supports amd64 (Intel) and arm64 (Apple Silicon, Raspberry Pi 3+ on 64-bit OS).
 * **Smart**: Only downloads recordings that haven't already been downloaded.
 * **Resilient**: If a download interrupts for whatever reason, the script resumes where it left off the next time it runs. This is especially useful for possibly unreliable Wi-Fi connections from a garage.
 * **Hands-off**: Optionally retains recordings for a set amount of time. Outdated recordings are automatically removed.
