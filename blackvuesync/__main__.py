@@ -438,14 +438,14 @@ def cmd_serve(args: argparse.Namespace) -> int:
     config_path = Path(args.config_path) if args.config_path else _DEFAULT_SETTINGS_PATH
     store = SettingsStore(config_path)
     settings = store.get()
-    # re-applies log level from settings now that the store is loaded; the
-    # format itself stays whatever was set at startup (a format change is
-    # TIER='immediate' but requires re-attaching the handler, which the
-    # future LogSettings on_change listener will own; for phase g we rely on
-    # the startup-time default and only update verbosity). serve mode keeps
-    # a floor of INFO so scheduler / waitress startup lines always emit
-    # regardless of the user's verbose setting (operators need to see them
-    # in docker logs); quiet=true still suppresses everything below ERROR.
+    # re-applies log format and level now that settings are loaded.
+    # configure_logging is idempotent: it iterates existing handlers and calls
+    # setFormatter, so the second call replaces the bootstrap formatter without
+    # duplicating handlers. serve mode keeps a floor of INFO so scheduler /
+    # waitress startup lines always emit regardless of the user's verbose
+    # setting (operators need to see them in docker logs); quiet=true still
+    # suppresses everything below ERROR.
+    configure_logging(settings.logging.format)
     if settings.logging.quiet:
         set_logging_levels(-1, False)
     else:
