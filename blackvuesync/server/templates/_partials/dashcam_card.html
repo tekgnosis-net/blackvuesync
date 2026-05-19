@@ -1,0 +1,15 @@
+{# dashcam card fragment. polled every 5s by HTMX. #}
+<div class="card"
+     id="dashcam-card"
+     hx-get="/hx/dashcam-card"
+     hx-trigger="every 5s"
+     hx-swap="outerHTML">
+  <div class="card-label">Dashcam</div>
+  {% if reachable %}
+    <div class="card-value"><span class="dot green"></span>reachable</div>
+    <div class="card-sub">{{ address }} · {{ latency_ms }} ms</div>
+  {% else %}
+    <div class="card-value"><span class="dot red"></span>unreachable</div>
+    <div class="card-sub">{{ address or "no address configured" }} · {{ reason }}</div>
+  {% endif %}
+</div>

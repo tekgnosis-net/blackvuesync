@@ -1,0 +1,15 @@
+{# next-scheduled card fragment. polled every 5s by HTMX. #}
+<div class="card"
+     id="next-scheduled-card"
+     hx-get="/hx/next-scheduled-card"
+     hx-trigger="every 5s"
+     hx-swap="outerHTML">
+  <div class="card-label">Next scheduled</div>
+  {% if paused %}
+    <div class="card-value">paused</div>
+    <div class="card-sub">cron: {{ cron_expression }} · {{ timezone }}</div>
+  {% else %}
+    <div class="card-value">{{ next_human }}</div>
+    <div class="card-sub">cron: {{ cron_expression }} · {{ timezone }}</div>
+  {% endif %}
+</div>

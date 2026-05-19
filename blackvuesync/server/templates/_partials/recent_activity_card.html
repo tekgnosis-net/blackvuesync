@@ -1,0 +1,18 @@
+{# recent-activity card fragment. polled every 5s by HTMX. #}
+<div class="card"
+     id="recent-activity-card"
+     hx-get="/hx/recent-activity-card"
+     hx-trigger="every 5s"
+     hx-swap="outerHTML">
+  <div class="card-label">Recent activity</div>
+  {% if recordings %}
+    <div class="card-value">{{ total }} recordings</div>
+    <div class="card-stack">
+      {% for r in recordings %}
+        <div class="row"><span class="file">{{ r.filename }}</span></div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="card-value">No recordings yet</div>
+  {% endif %}
+</div>
