@@ -6,7 +6,7 @@ import dataclasses
 import json
 from typing import Any
 
-from flask import Blueprint, Response, current_app
+from flask import Blueprint, Response, current_app, request
 
 from blackvuesync.server.auth import login_required
 from blackvuesync.settings import _SECTION_FIELDS, Settings, SettingsStore
@@ -55,6 +55,87 @@ def get_settings() -> Response:
         status=200,
         mimetype=_MIME_JSON,
     )
+
+
+def _strip_redacted(payload: dict[str, Any], section_name: str) -> dict[str, Any]:
+    """removes fields whose value is the redaction sentinel.
+
+    a client that re-submits the redacted snapshot from GET must not
+    overwrite the real secret with '***'. callers treat absent keys as
+    'leave unchanged'.
+    """
+    redact = _REDACTED_FIELDS.get(section_name, set())
+    return {
+        k: v
+        for k, v in payload.items()
+        if not (k in redact and v == _REDACTED_SENTINEL)
+    }
+
+
+@api_settings_bp.route("/<string:section_name>", methods=["PATCH"])
+@login_required
+def patch_section(section_name: str) -> Response:
+    """updates a section partially; validates; returns the tier on success."""
+    if section_name not in _SECTION_FIELDS:
+        body = json.dumps(
+            {
+                "error": f"unknown settings section: {section_name!r}",
+                "code": "SECTION_NOT_FOUND",
+                "details": {"section": section_name},
+            }
+        )
+        return Response(body, status=404, mimetype=_MIME_JSON)
+
+    payload = request.get_json(silent=True) or {}
+    payload = _strip_redacted(payload, section_name)
+
+    store: SettingsStore = current_app.settings_store  # type: ignore[attr-defined]
+    section_cls = _SECTION_FIELDS[section_name]
+
+    current = store.get()
+    current_section = getattr(current, section_name)
+    try:
+        new_section = dataclasses.replace(current_section, **payload)
+    except TypeError as e:
+        # unknown field name in payload; treat as a validation failure.
+        body = json.dumps(
+            {
+                "error": "settings validation failed",
+                "code": "SETTINGS_INVALID",
+                "details": {
+                    "field_errors": [
+                        {"path": f"{section_name}.?", "message": str(e)},
+                    ]
+                },
+            }
+        )
+        return Response(body, status=422, mimetype=_MIME_JSON)
+
+    errors = new_section.validate()
+    if errors:
+        body = json.dumps(
+            {
+                "error": "settings validation failed",
+                "code": "SETTINGS_INVALID",
+                "details": {
+                    "field_errors": [
+                        {"path": section_name, "message": msg} for msg in errors
+                    ]
+                },
+            }
+        )
+        return Response(body, status=422, mimetype=_MIME_JSON)
+
+    store.update(lambda s: dataclasses.replace(s, **{section_name: new_section}))
+
+    body = json.dumps(
+        {
+            "section": section_name,
+            "tier": section_cls.TIER,  # type: ignore[attr-defined]
+            "applied": True,
+        }
+    )
+    return Response(body, status=200, mimetype=_MIME_JSON)
 
 
 __all__ = ["api_settings_bp"]

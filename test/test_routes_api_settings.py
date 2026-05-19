@@ -94,3 +94,57 @@ class TestGetSettings:
         client, _ = logged_in_client
         resp = client.get("/api/settings")
         assert "application/json" in resp.content_type
+
+
+class TestPatchSettings:
+    """tests for PATCH /api/settings/<section>."""
+
+    def test_updates_section_and_returns_tier(self, logged_in_client: Any) -> None:
+        client, store = logged_in_client
+        resp = client.patch(
+            "/api/settings/sync",
+            json={"grouping": "daily"},
+        )
+        assert resp.status_code == 200
+        body = json.loads(resp.data)
+        assert body["section"] == "sync"
+        assert body["tier"] == "next_tick"
+        assert body["applied"] is True
+        # verify persistence
+        assert store.get().sync.grouping == "daily"
+
+    def test_unknown_section_returns_404(self, logged_in_client: Any) -> None:
+        client, _ = logged_in_client
+        resp = client.patch("/api/settings/nonexistent", json={"foo": 1})
+        assert resp.status_code == 404
+        body = json.loads(resp.data)
+        assert body["code"] == "SECTION_NOT_FOUND"
+
+    def test_invalid_value_returns_422_with_field_errors(
+        self, logged_in_client: Any
+    ) -> None:
+        client, _ = logged_in_client
+        resp = client.patch(
+            "/api/settings/connection",
+            json={"address": ""},
+        )
+        assert resp.status_code == 422
+        body = json.loads(resp.data)
+        assert body["code"] == "SETTINGS_INVALID"
+        assert isinstance(body["details"]["field_errors"], list)
+        assert len(body["details"]["field_errors"]) >= 1
+
+    def test_redaction_sentinel_means_leave_unchanged(
+        self, logged_in_client: Any
+    ) -> None:
+        """sending password_hash='***' must not overwrite the real hash."""
+        client, store = logged_in_client
+        before = store.get().auth.password_hash
+        resp = client.patch(
+            "/api/settings/auth",
+            json={"password_hash": "***", "username": "operator"},
+        )
+        assert resp.status_code == 200
+        after = store.get().auth
+        assert after.password_hash == before
+        assert after.username == "operator"
