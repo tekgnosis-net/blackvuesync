@@ -80,3 +80,41 @@ class TestInitScheduler:
             assert str(scheduler.get_job(_JOB_ID).trigger) == str(original)
         finally:
             scheduler.shutdown(wait=False)
+
+
+class TestScheduledRun:
+    """tests for _scheduled_run job function."""
+
+    def test_skips_when_sync_already_running(self, settings_path: Path) -> None:
+        """when trigger_sync returns already_running, _scheduled_run logs and
+        does not raise."""
+        from blackvuesync.server.scheduler import _scheduled_run
+
+        store = _make_store(settings_path)
+        publisher = ProgressPublisher()
+
+        with patch(
+            "blackvuesync.server.scheduler.trigger_sync",
+            return_value={"status": "already_running", "job_id": "abc123"},
+        ):
+            # must not raise
+            _scheduled_run(store, publisher)
+
+    def test_calls_trigger_sync_with_current_settings(
+        self, settings_path: Path
+    ) -> None:
+        """_scheduled_run reads settings fresh from the store on each tick."""
+        from blackvuesync.server.scheduler import _scheduled_run
+
+        store = _make_store(settings_path)
+        publisher = ProgressPublisher()
+
+        with patch(
+            "blackvuesync.server.scheduler.trigger_sync",
+            return_value={"status": "started", "job_id": "deadbeef"},
+        ) as mock_trigger:
+            _scheduled_run(store, publisher)
+            mock_trigger.assert_called_once()
+            settings_arg, publisher_arg = mock_trigger.call_args.args
+            assert settings_arg.connection.address == "192.168.0.1"
+            assert publisher_arg is publisher
