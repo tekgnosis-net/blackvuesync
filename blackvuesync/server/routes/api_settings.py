@@ -6,10 +6,16 @@ import dataclasses
 import json
 from typing import Any
 
-from flask import Blueprint, Response, current_app, request
+from flask import Blueprint, Response, current_app
 
 from blackvuesync.server.auth import login_required
-from blackvuesync.settings import _SECTION_FIELDS, Settings, SettingsStore
+from blackvuesync.server.routes._helpers import require_dict_body
+from blackvuesync.settings import (
+    _SECTION_FIELDS,
+    _TUPLE_FIELDS,
+    Settings,
+    SettingsStore,
+)
 
 api_settings_bp = Blueprint("api_settings_bp", __name__, url_prefix="/api/settings")
 
@@ -75,6 +81,24 @@ def _strip_redacted(payload: dict[str, Any], section_name: str) -> dict[str, Any
     }
 
 
+def _coerce_tuples(payload: dict[str, Any], section_name: str) -> dict[str, Any]:
+    """converts list values to tuple for fields declared as tuple in the
+    section dataclass.
+
+    JSON has no tuple, so clients send a list for fields like sync.include.
+    dataclasses.replace does not enforce type annotations at runtime, so
+    without this step the in-memory dataclass would hold a list and violate
+    its own type contract (the on-disk JSON round-trip would still restore
+    a tuple, masking the bug until the next consumer relies on tuple
+    semantics).
+    """
+    tuple_fields = _TUPLE_FIELDS.get(section_name, set())
+    return {
+        k: tuple(v) if k in tuple_fields and isinstance(v, list) else v
+        for k, v in payload.items()
+    }
+
+
 @api_settings_bp.route("/<string:section_name>", methods=["PATCH"])
 @login_required
 def patch_section(section_name: str) -> Response:
@@ -89,8 +113,12 @@ def patch_section(section_name: str) -> Response:
         )
         return Response(body, status=404, mimetype=_MIME_JSON)
 
-    payload = request.get_json(silent=True) or {}
+    payload, err = require_dict_body()
+    if err is not None:
+        return err
+    assert payload is not None  # type narrowing for mypy
     payload = _strip_redacted(payload, section_name)
+    payload = _coerce_tuples(payload, section_name)
 
     store: SettingsStore = current_app.settings_store  # type: ignore[attr-defined]
     section_cls = _SECTION_FIELDS[section_name]

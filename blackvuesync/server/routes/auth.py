@@ -18,6 +18,7 @@ from flask import (
 from werkzeug.wrappers import Response
 
 from blackvuesync.server.auth import (
+    MIN_PASSWORD_LENGTH,
     clear_login_failures,
     hash_password,
     is_login_locked_out,
@@ -36,9 +37,6 @@ _FIRST_RUN_ENDPOINT = "auth_bp.first_run"
 
 # minimum response time for a failed login in seconds; guards against timing attacks
 _MIN_FAILURE_SECONDS = 1.5
-
-# minimum password length for first-run setup
-_MIN_PASSWORD_LENGTH = 12
 
 
 @bp.before_app_request
@@ -170,11 +168,11 @@ def first_run_post() -> tuple[str, int] | Response:
     password = request.form.get("password", "")
     confirm = request.form.get("confirm", "")
 
-    if len(password) < _MIN_PASSWORD_LENGTH:
+    if len(password) < MIN_PASSWORD_LENGTH:
         return (
             render_template(
                 _FIRST_RUN_TEMPLATE,
-                error=f"password must be at least {_MIN_PASSWORD_LENGTH} characters",
+                error=f"password must be at least {MIN_PASSWORD_LENGTH} characters",
                 username=username,
             ),
             400,

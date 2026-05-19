@@ -188,6 +188,14 @@ class TestChangePassword:
             )
         assert resp.status_code == 302
 
+    def test_non_dict_body_returns_400(self, logged_in_client: Any) -> None:
+        """a JSON array as body must return 400 INVALID_BODY, not 500."""
+        client, _ = logged_in_client
+        resp = client.post("/api/auth/password", json=[1, 2, 3])
+        assert resp.status_code == 400
+        body = json.loads(resp.data)
+        assert body["code"] == "INVALID_BODY"
+
 
 class TestRotateSessions:
     """tests for DELETE /api/auth/sessions."""

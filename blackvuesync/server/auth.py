@@ -29,6 +29,10 @@ _HASHER = PasswordHasher(
     salt_len=16,
 )
 
+# minimum password length; shared by the first-run wizard and the api password
+# change endpoint so policy stays consistent across surfaces.
+MIN_PASSWORD_LENGTH = 12
+
 # rate-limit sliding window: 10 failures within 10 minutes locks the IP
 _FAILURE_WINDOW_SECONDS = 600
 _FAILURE_THRESHOLD = 10

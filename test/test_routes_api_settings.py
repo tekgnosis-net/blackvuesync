@@ -175,6 +175,46 @@ class TestPatchSettings:
         assert after.password_hash == before
         assert after.username == "operator"
 
+    def test_non_sentinel_value_for_redacted_field_overwrites(
+        self, logged_in_client: Any
+    ) -> None:
+        """sending a real (non-sentinel) value for a redacted field overwrites.
+
+        guards against a future refactor that turns _strip_redacted into
+        'always strip password_hash regardless of value'.
+        """
+        client, store = logged_in_client
+        new_hash = hash_password("a-fresh-and-different-pw")
+        resp = client.patch(
+            "/api/settings/auth",
+            json={"password_hash": new_hash},
+        )
+        assert resp.status_code == 200
+        assert store.get().auth.password_hash == new_hash
+
+    def test_non_dict_body_returns_400(self, logged_in_client: Any) -> None:
+        """a JSON array as body must return 400 INVALID_BODY, not 500."""
+        client, _ = logged_in_client
+        resp = client.patch("/api/settings/sync", json=[1, 2, 3])
+        assert resp.status_code == 400
+        body = json.loads(resp.data)
+        assert body["code"] == "INVALID_BODY"
+
+    def test_tuple_field_patch_stores_tuple(self, logged_in_client: Any) -> None:
+        """JSON lists must be coerced to tuple for tuple-annotated fields.
+
+        without coercion the in-memory dataclass would hold a list, silently
+        violating its `tuple[str, ...]` annotation until the next process
+        restart restored the type via the JSON round-trip.
+        """
+        client, store = logged_in_client
+        resp = client.patch(
+            "/api/settings/sync",
+            json={"skip_metadata": ["t", "3"]},
+        )
+        assert resp.status_code == 200
+        assert isinstance(store.get().sync.skip_metadata, tuple)
+
 
 class TestCsrf:
     """tests that PATCH /api/settings/* requires a CSRF token."""

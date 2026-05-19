@@ -5,11 +5,11 @@ from __future__ import annotations
 import dataclasses
 import json
 import secrets
-from typing import Any
 
 from flask import Blueprint, Response, current_app, g, request
 
 from blackvuesync.server.auth import (
+    MIN_PASSWORD_LENGTH,
     clear_login_failures,
     hash_password,
     is_login_locked_out,
@@ -17,12 +17,12 @@ from blackvuesync.server.auth import (
     record_login_failure,
     verify_password,
 )
+from blackvuesync.server.routes._helpers import require_dict_body
 from blackvuesync.settings import SettingsStore
 
 api_auth_bp = Blueprint("api_auth_bp", __name__, url_prefix="/api/auth")
 
 _MIME_JSON = "application/json"
-_MIN_PASSWORD_LENGTH = 12
 
 
 @api_auth_bp.route("/me", methods=["GET"])
@@ -50,7 +50,10 @@ def change_password() -> Response:
         )
         return Response(body, status=429, mimetype=_MIME_JSON)
 
-    payload: dict[str, Any] = request.get_json(silent=True) or {}
+    payload, err = require_dict_body()
+    if err is not None:
+        return err
+    assert payload is not None  # type narrowing for mypy
     current = payload.get("current_password", "")
     new = payload.get("new_password", "")
 
@@ -68,7 +71,7 @@ def change_password() -> Response:
         )
         return Response(body, status=401, mimetype=_MIME_JSON)
 
-    if len(new) < _MIN_PASSWORD_LENGTH:
+    if len(new) < MIN_PASSWORD_LENGTH:
         body = json.dumps(
             {
                 "error": "new password too short",
@@ -77,7 +80,7 @@ def change_password() -> Response:
                     "field_errors": [
                         {
                             "path": "new_password",
-                            "message": f"must be at least {_MIN_PASSWORD_LENGTH} characters",
+                            "message": f"must be at least {MIN_PASSWORD_LENGTH} characters",
                         }
                     ]
                 },
@@ -101,8 +104,9 @@ def change_password() -> Response:
 @login_required
 def rotate_sessions() -> Response:
     """rotates the session secret. all existing sessions invalidate on next
-    restart; the running process keeps using the old secret until cmd_serve
-    re-runs create_app. this matches TIER='restart' for the web section."""
+    restart; the running process keeps using the old secret because Flask
+    reads SECRET_KEY once at create_app() time, so propagation is
+    restart-tier even though auth itself is TIER='immediate'."""
     store: SettingsStore = current_app.settings_store  # type: ignore[attr-defined]
     new_secret = secrets.token_hex(32)
     store.update(
