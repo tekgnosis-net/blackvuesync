@@ -1,0 +1,172 @@
+"""api settings routes: GET /api/settings, PATCH /api/settings/<section>."""
+
+from __future__ import annotations
+
+import dataclasses
+import json
+from typing import Any
+
+from flask import Blueprint, Response, current_app
+
+from blackvuesync.server.auth import login_required
+from blackvuesync.server.routes._helpers import require_dict_body
+from blackvuesync.settings import (
+    _SECTION_FIELDS,
+    _TUPLE_FIELDS,
+    Settings,
+    SettingsStore,
+)
+
+api_settings_bp = Blueprint("api_settings_bp", __name__, url_prefix="/api/settings")
+
+_MIME_JSON = "application/json"
+
+# fields whose values must never be sent to the client; the literal "***"
+# sentinel is returned instead. the same sentinel is also the signal on
+# PATCH that means "leave this field unchanged".
+_REDACTED_FIELDS: dict[str, set[str]] = {
+    "auth": {"password_hash", "session_secret"},
+}
+
+_REDACTED_SENTINEL = "***"
+
+
+def _section_to_dict(name: str, section: Any) -> dict[str, Any]:
+    """converts a section dataclass to a dict, redacting secret fields and
+    adding the _tier annotation."""
+    d: dict[str, Any] = dataclasses.asdict(section)
+    redact = _REDACTED_FIELDS.get(name, set())
+    # unconditional redaction: emit '***' even when the field is empty, so
+    # the first-run state (password_hash="") does not leak the auth-not-yet-set
+    # condition through the api.
+    for field_name in redact:
+        if field_name in d:
+            d[field_name] = _REDACTED_SENTINEL
+    d["_tier"] = section.__class__.TIER
+    return d
+
+
+def _settings_to_dict(s: Settings) -> dict[str, Any]:
+    """converts the full Settings to a redacted dict with per-section tier."""
+    out: dict[str, Any] = {"version": s.version}
+    for name in _SECTION_FIELDS:
+        out[name] = _section_to_dict(name, getattr(s, name))
+    return out
+
+
+@api_settings_bp.route("", methods=["GET"])
+@login_required
+def get_settings() -> Response:
+    """returns the full settings as JSON; secrets redacted to '***'."""
+    store: SettingsStore = current_app.settings_store  # type: ignore[attr-defined]
+    return Response(
+        json.dumps(_settings_to_dict(store.get())),
+        status=200,
+        mimetype=_MIME_JSON,
+    )
+
+
+def _strip_redacted(payload: dict[str, Any], section_name: str) -> dict[str, Any]:
+    """removes fields whose value is the redaction sentinel.
+
+    a client that re-submits the redacted snapshot from GET must not
+    overwrite the real secret with '***'. callers treat absent keys as
+    'leave unchanged'.
+    """
+    redact = _REDACTED_FIELDS.get(section_name, set())
+    return {
+        k: v
+        for k, v in payload.items()
+        if not (k in redact and v == _REDACTED_SENTINEL)
+    }
+
+
+def _coerce_tuples(payload: dict[str, Any], section_name: str) -> dict[str, Any]:
+    """converts list values to tuple for fields declared as tuple in the
+    section dataclass.
+
+    JSON has no tuple, so clients send a list for fields like sync.include.
+    dataclasses.replace does not enforce type annotations at runtime, so
+    without this step the in-memory dataclass would hold a list and violate
+    its own type contract (the on-disk JSON round-trip would still restore
+    a tuple, masking the bug until the next consumer relies on tuple
+    semantics).
+    """
+    tuple_fields = _TUPLE_FIELDS.get(section_name, set())
+    return {
+        k: tuple(v) if k in tuple_fields and isinstance(v, list) else v
+        for k, v in payload.items()
+    }
+
+
+@api_settings_bp.route("/<string:section_name>", methods=["PATCH"])
+@login_required
+def patch_section(section_name: str) -> Response:
+    """updates a section partially; validates; returns the tier on success."""
+    if section_name not in _SECTION_FIELDS:
+        body = json.dumps(
+            {
+                "error": f"unknown settings section: {section_name!r}",
+                "code": "SECTION_NOT_FOUND",
+                "details": {"section": section_name},
+            }
+        )
+        return Response(body, status=404, mimetype=_MIME_JSON)
+
+    payload, err = require_dict_body()
+    if err is not None:
+        return err
+    assert payload is not None  # type narrowing for mypy
+    payload = _strip_redacted(payload, section_name)
+    payload = _coerce_tuples(payload, section_name)
+
+    store: SettingsStore = current_app.settings_store  # type: ignore[attr-defined]
+    section_cls = _SECTION_FIELDS[section_name]
+
+    current = store.get()
+    current_section = getattr(current, section_name)
+    try:
+        new_section = dataclasses.replace(current_section, **payload)
+    except TypeError as e:
+        # unknown field name in payload; treat as a validation failure.
+        body = json.dumps(
+            {
+                "error": "settings validation failed",
+                "code": "SETTINGS_INVALID",
+                "details": {
+                    "field_errors": [
+                        {"path": f"{section_name}.?", "message": str(e)},
+                    ]
+                },
+            }
+        )
+        return Response(body, status=422, mimetype=_MIME_JSON)
+
+    errors = new_section.validate()
+    if errors:
+        body = json.dumps(
+            {
+                "error": "settings validation failed",
+                "code": "SETTINGS_INVALID",
+                "details": {
+                    "field_errors": [
+                        {"path": section_name, "message": msg} for msg in errors
+                    ]
+                },
+            }
+        )
+        return Response(body, status=422, mimetype=_MIME_JSON)
+
+    store.update(lambda s: dataclasses.replace(s, **{section_name: new_section}))
+
+    body = json.dumps(
+        {
+            "section": section_name,
+            "tier": section_cls.TIER,  # type: ignore[attr-defined]
+            "applied": True,
+        }
+    )
+    return Response(body, status=200, mimetype=_MIME_JSON)
+
+
+__all__ = ["api_settings_bp"]
