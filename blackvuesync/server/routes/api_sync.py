@@ -132,4 +132,36 @@ def last_sync() -> Response:
     return Response(body, status=200, mimetype=_MIME_JSON)
 
 
+@api_sync_bp.route("/stop", methods=["POST"])
+@login_required
+def stop_sync() -> Response:
+    """requests cooperative stop of the active sync.
+
+    returns 202 + {job_id, stopping: true} if a sync was running;
+    404 + {code: 'SYNC_NOT_RUNNING'} if no sync is active. the actual
+    stop happens between download chunks; the next snapshot will report
+    state='failed' with reason="stopped by user" once the chunk loop
+    raises UserWarning.
+    """
+    # pylint: disable=import-outside-toplevel
+    from blackvuesync.sync import request_stop
+
+    # pylint: enable=import-outside-toplevel
+
+    snap = _publisher().snapshot()
+    if snap.state != "running":
+        body = json.dumps(
+            {
+                "error": "no sync is running",
+                "code": "SYNC_NOT_RUNNING",
+                "details": {},
+            }
+        )
+        return Response(body, status=404, mimetype=_MIME_JSON)
+
+    request_stop()
+    body = json.dumps({"job_id": snap.job_id, "stopping": True})
+    return Response(body, status=202, mimetype=_MIME_JSON)
+
+
 __all__ = ["api_sync_bp"]
