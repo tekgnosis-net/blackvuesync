@@ -16,6 +16,10 @@ BlackVue dashcams expose an HTTP server that can be used to download all recordi
 
 A typical setup would be a periodic cron job or a Docker container running on a local server.
 
+The HTTP API surface is documented in [docs/api.md](docs/api.md). The
+long-running web service started shipping in 2.3.0; older releases run the
+cron-era CLI.
+
 ## Features
 
 * **Portable runtimes:**
@@ -317,6 +321,23 @@ docker run -d --restart unless-stopped \
     --name blackvuesync \
 ghcr.io/tekgnosis-net/blackvuesync
 ```
+
+##### Reverse Proxy
+
+The Flask service inside the container listens on HTTP port 8080; HTTPS
+should terminate at a reverse proxy. A minimal [Caddy](https://caddyserver.com/)
+configuration:
+
+```caddyfile
+blackvuesync.example.com {
+    encode zstd gzip
+    reverse_proxy localhost:8080
+}
+```
+
+Set `BLACKVUESYNC_TRUST_PROXY=1` in the container environment so the session
+cookie is marked `Secure` (see the [Web UI Reverse Proxy](#reverse-proxy-caddy-example)
+section above for details).
 
 ##### Docker Compose
 
