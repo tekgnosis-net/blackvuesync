@@ -41,6 +41,14 @@ def trigger_sync(
         current_snap = publisher.snapshot()
         return {"status": "already_running", "job_id": current_snap.job_id}
 
+    # clears any leftover stop flag from a previous run; the next request to
+    # /api/sync/stop sets it again on demand.
+    # pylint: disable=import-outside-toplevel
+    from blackvuesync.sync import clear_stop
+
+    clear_stop()
+    # pylint: enable=import-outside-toplevel
+
     # pre-generate job_id before spawning the thread so the 202 response and
     # the publisher state always agree on the same id.
     job_id = uuid.uuid4().hex
