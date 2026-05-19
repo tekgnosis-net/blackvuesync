@@ -417,14 +417,15 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
-    """starts the web server and blocks until interrupted."""
+    """starts the web server and the cron scheduler; blocks until interrupted."""
     # deferred imports keep these optional at module load time; the sync
-    # subcommand does not need flask or waitress.
+    # subcommand does not need flask, waitress, or apscheduler.
     # pylint: disable=import-outside-toplevel
     import waitress
 
     from blackvuesync.server import create_app
     from blackvuesync.server.progress import ProgressPublisher
+    from blackvuesync.server.scheduler import init_scheduler
 
     # pylint: enable=import-outside-toplevel
 
@@ -434,8 +435,19 @@ def cmd_serve(args: argparse.Namespace) -> int:
     app = create_app(store, progress_publisher=publisher)
     settings = store.get()
     port = args.port if args.port is not None else settings.web.port
+
+    scheduler = init_scheduler(store, publisher)
+    logger.info(
+        "scheduler started: %r (%s)",
+        settings.schedule.cron_expression,
+        settings.schedule.timezone,
+    )
     logger.info("starting web server on 0.0.0.0:%d", port)
-    waitress.serve(app, host="0.0.0.0", port=port)
+    try:
+        waitress.serve(app, host="0.0.0.0", port=port)
+    finally:
+        # waits for the active sync (if any) to finish gracefully on SIGTERM.
+        scheduler.shutdown(wait=True)
     return 0
 
 
