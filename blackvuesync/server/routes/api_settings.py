@@ -30,8 +30,11 @@ def _section_to_dict(name: str, section: Any) -> dict[str, Any]:
     adding the _tier annotation."""
     d: dict[str, Any] = dataclasses.asdict(section)
     redact = _REDACTED_FIELDS.get(name, set())
+    # unconditional redaction: emit '***' even when the field is empty, so
+    # the first-run state (password_hash="") does not leak the auth-not-yet-set
+    # condition through the api.
     for field_name in redact:
-        if field_name in d and d[field_name]:
+        if field_name in d:
             d[field_name] = _REDACTED_SENTINEL
     d["_tier"] = section.__class__.TIER
     return d

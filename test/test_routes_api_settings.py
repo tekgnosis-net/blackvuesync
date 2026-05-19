@@ -62,6 +62,32 @@ class TestGetSettings:
         assert body["auth"]["password_hash"] == "***"
         assert body["auth"]["session_secret"] == "***"
 
+    def test_redacts_empty_secrets_unconditionally(self, settings_path: Path) -> None:
+        """secrets are redacted to '***' even when empty, so the first-run
+        state (password_hash='') does not leak through the api."""
+        store = _make_store(settings_path)
+        pw_hash = hash_password("test-password-1234")
+        # seeds the admin so we can log in, then clears the session_secret to
+        # exercise the empty-secret branch of the redaction logic.
+        store.update(
+            lambda s: dataclasses.replace(
+                s,
+                auth=dataclasses.replace(
+                    s.auth, username="admin", password_hash=pw_hash, session_secret=""
+                ),
+            )
+        )
+        app = create_app(store, testing=True)
+        with app.test_client() as client:
+            client.post(
+                "/login",
+                data={"username": "admin", "password": "test-password-1234"},
+                follow_redirects=True,
+            )
+            resp = client.get("/api/settings")
+        body = json.loads(resp.data)
+        assert body["auth"]["session_secret"] == "***"
+
     def test_includes_tier_per_section(self, logged_in_client: Any) -> None:
         client, _ = logged_in_client
         resp = client.get("/api/settings")

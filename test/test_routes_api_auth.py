@@ -73,6 +73,55 @@ class TestAuthMe:
             resp = client.get("/api/auth/me")
         assert resp.status_code == 302
 
+    def test_returns_anonymous_in_none_mode(self, settings_path: Path) -> None:
+        """when auth.mode is 'none', /api/auth/me reports the anonymous user.
+
+        seeds the admin password first to bypass the Phase C sticky first-run
+        redirect, which fires whenever password_hash is empty regardless of
+        the configured auth mode.
+        """
+        store = _make_store(settings_path)
+        _seed_admin(store)
+        store.update(
+            lambda s: dataclasses.replace(
+                s, auth=dataclasses.replace(s.auth, mode="none")
+            )
+        )
+        app = create_app(store, testing=True)
+        with app.test_client() as client:
+            resp = client.get("/api/auth/me")
+        assert resp.status_code == 200
+        body = json.loads(resp.data)
+        assert body["username"] == "anonymous"
+        assert body["mode"] == "none"
+
+    def test_returns_proxy_header_user_in_proxy_mode(self, settings_path: Path) -> None:
+        """when auth.mode is 'proxy', /api/auth/me returns the proxy-supplied user.
+
+        seeds the admin password first to bypass the Phase C sticky first-run
+        redirect; the password is unused in proxy mode.
+        """
+        store = _make_store(settings_path)
+        _seed_admin(store)
+        store.update(
+            lambda s: dataclasses.replace(
+                s,
+                auth=dataclasses.replace(
+                    s.auth,
+                    mode="proxy",
+                    trusted_proxies=("127.0.0.1",),
+                    proxy_user_header="X-Remote-User",
+                ),
+            )
+        )
+        app = create_app(store, testing=True)
+        with app.test_client() as client:
+            resp = client.get("/api/auth/me", headers={"X-Remote-User": "alice"})
+        assert resp.status_code == 200
+        body = json.loads(resp.data)
+        assert body["username"] == "alice"
+        assert body["mode"] == "proxy"
+
 
 class TestChangePassword:
     """tests for POST /api/auth/password."""
