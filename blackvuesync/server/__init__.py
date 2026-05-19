@@ -14,7 +14,7 @@ from blackvuesync.server.progress import ProgressPublisher
 from blackvuesync.settings import SettingsStore
 
 
-def create_app(
+def create_app(  # pylint: disable=too-many-locals
     settings_store: SettingsStore,
     testing: bool = False,
     progress_publisher: Optional[ProgressPublisher] = None,
@@ -66,6 +66,7 @@ def create_app(
 
     # pylint: disable=import-outside-toplevel
     from blackvuesync.server.routes.api_auth import api_auth_bp
+    from blackvuesync.server.routes.api_schedule import api_schedule_bp
     from blackvuesync.server.routes.api_settings import api_settings_bp
     from blackvuesync.server.routes.api_sync import api_sync_bp
     from blackvuesync.server.routes.auth import bp as auth_bp
@@ -81,6 +82,7 @@ def create_app(
     app.register_blueprint(api_sync_bp)
     app.register_blueprint(api_settings_bp)
     app.register_blueprint(api_auth_bp)
+    app.register_blueprint(api_schedule_bp)
     app.register_blueprint(hx_sync_bp)
 
     @app.after_request
