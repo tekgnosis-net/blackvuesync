@@ -65,6 +65,7 @@ def create_app(
     # suppressed below because the deferred import is intentional.
 
     # pylint: disable=import-outside-toplevel
+    from blackvuesync.server.routes.api_settings import api_settings_bp
     from blackvuesync.server.routes.api_sync import api_sync_bp
     from blackvuesync.server.routes.auth import bp as auth_bp
     from blackvuesync.server.routes.health import bp as health_bp
@@ -77,6 +78,7 @@ def create_app(
     app.register_blueprint(ui_bp)
     app.register_blueprint(health_bp)
     app.register_blueprint(api_sync_bp)
+    app.register_blueprint(api_settings_bp)
     app.register_blueprint(hx_sync_bp)
 
     @app.after_request
