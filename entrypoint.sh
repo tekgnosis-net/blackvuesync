@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
+# entrypoint: remaps the dashcam user to PUID/PGID if set, then execs the
+# long-running web service as the dashcam user via su-exec (Alpine's lighter
+# alternative to gosu).
+set -eu
 
-/setuid.sh && su -m dashcam /blackvuesync.sh
+/setuid.sh
 
-# runs cron daemon if RUN_ONCE not set
-if [[ -z $RUN_ONCE ]]; then
-    exec crond -f
-fi
+exec su-exec dashcam python -m blackvuesync serve
