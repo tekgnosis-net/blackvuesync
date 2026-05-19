@@ -142,6 +142,10 @@ def stop_sync() -> Response:
     stop happens between download chunks; the next snapshot will report
     state='failed' with reason="stopped by user" once the chunk loop
     raises UserWarning.
+
+    benign TOCTOU race: if the sync finishes between the snapshot read
+    and request_stop(), the flag is set on no-op and cleared by the next
+    trigger_sync() call (sync_runner.py clears it before each new run).
     """
     # pylint: disable=import-outside-toplevel
     from blackvuesync.sync import request_stop

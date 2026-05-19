@@ -381,16 +381,18 @@ class TestStopSync:
         from blackvuesync.sync import clear_stop, is_stop_requested
 
         clear_stop()
-        resp = client.post("/api/sync/stop")
-        assert resp.status_code == 202
-        body = json.loads(resp.data)
-        assert body["stopping"] is True
-        assert body["job_id"] == pub.snapshot().job_id
-        assert is_stop_requested() is True
-
-        # clean up
-        clear_stop()
-        pub.end_job(success=False)
+        try:
+            resp = client.post("/api/sync/stop")
+            assert resp.status_code == 202
+            body = json.loads(resp.data)
+            assert body["stopping"] is True
+            assert body["job_id"] == pub.snapshot().job_id
+            assert is_stop_requested() is True
+        finally:
+            # cleanup runs even if any assertion above failed, preventing
+            # module-level _stop_event state from leaking into later tests
+            clear_stop()
+            pub.end_job(success=False)
 
     def test_returns_404_when_no_sync_is_running(self, logged_in_client: Any) -> None:
         """when state is idle, stop returns 404 SYNC_NOT_RUNNING."""
