@@ -79,10 +79,10 @@ def create_app(  # pylint: disable=too-many-locals
     app.register_blueprint(auth_bp)
     app.register_blueprint(ui_bp)
     app.register_blueprint(health_bp)
-    app.register_blueprint(api_sync_bp)
-    app.register_blueprint(api_settings_bp)
     app.register_blueprint(api_auth_bp)
     app.register_blueprint(api_schedule_bp)
+    app.register_blueprint(api_settings_bp)
+    app.register_blueprint(api_sync_bp)
     app.register_blueprint(hx_sync_bp)
 
     @app.after_request
