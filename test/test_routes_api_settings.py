@@ -61,3 +61,36 @@ class TestGetSettings:
         body = json.loads(resp.data)
         assert body["auth"]["password_hash"] == "***"
         assert body["auth"]["session_secret"] == "***"
+
+    def test_includes_tier_per_section(self, logged_in_client: Any) -> None:
+        client, _ = logged_in_client
+        resp = client.get("/api/settings")
+        body = json.loads(resp.data)
+        # spot-check the tier on three sections with different tiers.
+        assert body["connection"]["_tier"] == "restart"
+        assert body["sync"]["_tier"] == "next_tick"
+        assert body["logging"]["_tier"] == "immediate"
+
+    def test_redirects_to_login_when_not_authenticated(
+        self, settings_path: Path
+    ) -> None:
+        store = _make_store(settings_path)
+        pw_hash = hash_password("test-password-1234")
+        store.update(
+            lambda s: dataclasses.replace(
+                s,
+                auth=dataclasses.replace(
+                    s.auth, username="admin", password_hash=pw_hash
+                ),
+            )
+        )
+        app = create_app(store, testing=True)
+        with app.test_client() as client:
+            resp = client.get("/api/settings")
+        assert resp.status_code == 302
+        assert "/login" in resp.headers["Location"]
+
+    def test_content_type_is_json(self, logged_in_client: Any) -> None:
+        client, _ = logged_in_client
+        resp = client.get("/api/settings")
+        assert "application/json" in resp.content_type
