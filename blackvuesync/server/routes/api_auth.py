@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import secrets
 from typing import Any
 
 from flask import Blueprint, Response, current_app, g, request
@@ -93,6 +94,23 @@ def change_password() -> Response:
     clear_login_failures(ip)
 
     body = json.dumps({"applied": True})
+    return Response(body, status=200, mimetype=_MIME_JSON)
+
+
+@api_auth_bp.route("/sessions", methods=["DELETE"])
+@login_required
+def rotate_sessions() -> Response:
+    """rotates the session secret. all existing sessions invalidate on next
+    restart; the running process keeps using the old secret until cmd_serve
+    re-runs create_app. this matches TIER='restart' for the web section."""
+    store: SettingsStore = current_app.settings_store  # type: ignore[attr-defined]
+    new_secret = secrets.token_hex(32)
+    store.update(
+        lambda s: dataclasses.replace(
+            s, auth=dataclasses.replace(s.auth, session_secret=new_secret)
+        )
+    )
+    body = json.dumps({"rotated": True, "restart_required": True})
     return Response(body, status=200, mimetype=_MIME_JSON)
 
 

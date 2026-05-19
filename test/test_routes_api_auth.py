@@ -138,3 +138,27 @@ class TestChangePassword:
                 json={"current_password": "x", "new_password": "y"},
             )
         assert resp.status_code == 302
+
+
+class TestRotateSessions:
+    """tests for DELETE /api/auth/sessions."""
+
+    def test_rotates_session_secret(self, logged_in_client: Any) -> None:
+        client, store = logged_in_client
+        original_secret = store.get().auth.session_secret
+        resp = client.delete("/api/auth/sessions")
+        assert resp.status_code == 200
+        body = json.loads(resp.data)
+        assert body["rotated"] is True
+        assert body["restart_required"] is True
+        # the persisted secret changed
+        assert store.get().auth.session_secret != original_secret
+        assert len(store.get().auth.session_secret) >= 32
+
+    def test_redirects_to_login_when_unauthenticated(self, settings_path: Path) -> None:
+        store = _make_store(settings_path)
+        _seed_admin(store)
+        app = create_app(store, testing=True)
+        with app.test_client() as client:
+            resp = client.delete("/api/auth/sessions")
+        assert resp.status_code == 302
