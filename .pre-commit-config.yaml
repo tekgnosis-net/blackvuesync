@@ -72,6 +72,7 @@ repos:
           - flask-wtf~=1.2
           - waitress~=3.0
           - argon2-cffi~=23.1
+          - APScheduler~=3.10
 
   - repo: https://github.com/pycqa/pylint
     rev: v3.3.9
@@ -83,6 +84,7 @@ repos:
           - flask-wtf~=1.2
           - waitress~=3.0
           - argon2-cffi~=23.1
+          - APScheduler~=3.10
 
   - repo: https://github.com/sirosen/texthooks
     rev: 0.7.1

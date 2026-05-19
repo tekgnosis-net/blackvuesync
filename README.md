@@ -20,7 +20,7 @@ A typical setup would be a periodic cron job or a Docker container running on a 
 
 * **Portable runtimes:**
   * A [single, self-contained Python script](https://github.com/tekgnosis-net/blackvuesync/blob/main/blackvuesync.py) with no third-party dependencies. It can be copied and run anywhere, either [manually](#manual-usage) or [periodically](#unattended-usage).
-  * A [docker image](#docker) that runs periodically via an internal cron job. Supports amd64 (Intel), arm64 (Apple Silicon, Raspberry Pi 4+) and armv7 (Raspberry Pi 2/3).
+  * A [docker image](#docker) that runs a long-running web service with an internal scheduler. Supports amd64 (Intel) and arm64 (Apple Silicon, Raspberry Pi 3+ on 64-bit OS).
 * **Smart**: Only downloads recordings that haven't already been downloaded.
 * **Resilient**: If a download interrupts for whatever reason, the script resumes where it left off the next time it runs. This is especially useful for possibly unreliable Wi-Fi connections from a garage.
 * **Hands-off**: Optionally retains recordings for a set amount of time. Outdated recordings are automatically removed.
@@ -284,21 +284,24 @@ The first-run wizard will prompt for a new password.
 
 ##### Overview
 
-The [ghcr.io/tekgnosis-net/blackvuesync](https://github.com/tekgnosis-net/blackvuesync/pkgs/container/blackvuesync) docker image sets up a cron job internal to the container that runs the synchronization operation every 15 minutes.
+The [ghcr.io/tekgnosis-net/blackvuesync](https://github.com/tekgnosis-net/blackvuesync/pkgs/container/blackvuesync) docker image runs the long-running web service that schedules sync operations internally.
+
+Sync is now scheduler-driven inside the long-running web service. The `CRON` and `RUN_ONCE` environment variables of the cron-era image have been retired. To trigger an on-demand sync, POST to `/api/sync/now`. To change the schedule, edit `settings.schedule.cron_expression` in `settings.json` (default `*/15 * * * *`).
 
 ##### Quick Start
 
-It's a good idea to do a single, interactive dry run first with verbose logging:
+It's a good idea to do a single, interactive dry run first with verbose logging.
+The image's default CMD is `serve`, which starts the long-running web service.
+Overriding the CMD with `sync ...` runs one sync attempt and exits, which is
+ideal for smoke-testing:
 
 ```sh
 docker run -it --rm \
     -e ADDRESS=dashcam.example.net \
     -v $PWD:/recordings \
-    -e DRY_RUN=1 \
-    -e VERBOSE=1 \
-    -e RUN_ONCE=1 \
     --name blackvuesync \
-ghcr.io/tekgnosis-net/blackvuesync
+    ghcr.io/tekgnosis-net/blackvuesync \
+    sync --dry-run --verbose dashcam.example.net --destination /recordings
 ```
 
 Once that works, a typical invocation would be similar to:
@@ -387,9 +390,7 @@ Other parameters:
 * `METRICS_JOB`: Sets the Pushgateway job grouping value. (Default: `blackvuesync`.)
 * `METRICS_INSTANCE`: Sets the Pushgateway instance grouping value. (Default: empty, meaning the dashcam address.)
 * `METRICS_STATE_FILE`: If set, stores cross-run metrics state at this path. (Default: empty, meaning `.blackvuesync.metrics-state.json` under the destination when metrics are enabled.)
-* `CRON`: Set by default, makes it so downloads of normal recordings and unexpected error conditions are logged. Can be set to `""` to disable.
 * `DRY_RUN`: If set to any value, makes it so that the script communicates what it would do without actually doing anything. (Default: empty.)
-* `RUN_ONCE`: If set to any value, the docker image runs the sync operation once and exits without setting up the cron job. (Default: empty. Not supported in Docker Compose.)
 
 ## License
 

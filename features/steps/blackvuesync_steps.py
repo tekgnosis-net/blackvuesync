@@ -242,7 +242,8 @@ def _execute_docker(
     # configures volume mounting
     container.with_volume_mapping(str(destination), "/recordings", mode="rw")
 
-    # configures core environment variables
+    # configures core environment variables. ADDRESS is still set for the
+    # env-var-bootstrap path even though the CLI argv carries it explicitly.
     container.with_env("PYTHONUNBUFFERED", "1")
     container.with_env("ADDRESS", docker_address)
     container.with_env("AFFINITY_KEY", affinity_key)
@@ -261,51 +262,64 @@ def _execute_docker(
     logger.debug("setting docker container timezone to: %s", host_tz)
     container.with_env("TZ", host_tz)
 
-    # sets RUN_ONCE=1 only if not in cron mode
-    if not cron:
-        container.with_env("RUN_ONCE", "1")
+    # builds the equivalent of the retired blackvuesync.sh wrapper directly
+    # in Python: the entrypoint now passes the CMD argv through to
+    # `python -m blackvuesync`, so each former env var becomes a CLI flag.
+    args: list[str] = [
+        "sync",
+        docker_address,
+        "--destination",
+        "/recordings",
+        "--affinity-key",
+        affinity_key,
+    ]
 
-    # configures optional parameters
     if grouping:
-        container.with_env("GROUPING", grouping)
+        args += ["--grouping", grouping]
 
     if keep:
-        container.with_env("KEEP", keep)
+        args += ["--keep", keep]
 
     if priority:
-        container.with_env("PRIORITY", priority)
+        args += ["--priority", priority]
 
     if include:
-        container.with_env("INCLUDE", include)
+        args += ["--include", include]
 
     if exclude:
-        container.with_env("EXCLUDE", exclude)
+        args += ["--exclude", exclude]
 
     if max_used_disk is not None:
-        container.with_env("MAX_USED_DISK", str(max_used_disk))
+        args += ["--max-used-disk", str(max_used_disk)]
 
     if timeout is not None:
-        container.with_env("TIMEOUT", str(timeout))
+        args += ["--timeout", str(timeout)]
 
-    if verbose is not None:
-        container.with_env("VERBOSE", str(verbose))
+    if verbose:
+        args += ["--verbose"] * verbose
 
     if quiet:
-        container.with_env("QUIET", "1")
+        args += ["--quiet"]
 
     if cron:
-        container.with_env("CRON", "1")
+        args += ["--cron"]
 
     if dry_run:
-        container.with_env("DRY_RUN", "1")
+        args += ["--dry-run"]
 
     if retry_failed_after:
-        container.with_env("RETRY_FAILED_AFTER", retry_failed_after)
+        args += ["--retry-failed-after", retry_failed_after]
 
     if skip_metadata:
-        container.with_env("SKIP_METADATA", skip_metadata)
+        args += ["--skip-metadata", skip_metadata]
 
-    logger.info("Starting docker container with image: %s", context.docker_image.tag)
+    container.with_command(args)
+
+    logger.info(
+        "Starting docker container with image: %s, cmd: %s",
+        context.docker_image.tag,
+        args,
+    )
 
     # starts container and waits for completion
     try:

@@ -1,6 +1,6 @@
 [project]
 name = "blackvuesync"
-version = "2.3.0a0"
+version = "2.3.0a1"
 description = "Synchronize recordings from BlackVue dashcams to a local directory"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -27,6 +27,7 @@ dependencies = [
     "Flask-WTF~=1.2",
     "waitress~=3.0",
     "argon2-cffi~=23.1",
+    "APScheduler~=3.10",
 ]
 
 [project.scripts]
@@ -139,7 +140,7 @@ module = "features.mock_dashcam.server"
 warn_return_any = false
 
 [[tool.mypy.overrides]]
-module = ["test_auth", "test_routes_auth", "test_routes_health", "test_routes_ui", "test_security_headers", "test_sync_callback", "test_sync_runner", "test_routes_api_sync", "test_routes_hx_sync"]
+module = ["test_auth", "test_routes_auth", "test_routes_health", "test_routes_ui", "test_security_headers", "test_sync_callback", "test_sync_runner", "test_routes_api_sync", "test_routes_hx_sync", "test_scheduler"]
 disallow_untyped_decorators = false
 
 [[tool.mypy.overrides]]

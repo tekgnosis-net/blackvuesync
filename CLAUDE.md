@@ -325,11 +325,14 @@ The Docker image (`Dockerfile`):
 
 - Uses Alpine Linux for minimal size
 - Runs as `dashcam` user (UID/GID set via `PUID`/`PGID` env vars)
-- Internal cron job runs every 15 minutes (see `crontab` file)
-- `entrypoint.sh` handles user switching and cron setup
-- `blackvuesync.sh` wrapper translates env vars to CLI args
+- Sync is scheduler-driven from inside the long-running web service; cadence
+  comes from `settings.schedule.cron_expression` (default `*/15 * * * *`)
+- `entrypoint.sh` remaps the dashcam user via `setuid.sh`, then execs
+  `python -m blackvuesync` with the CMD passed by Docker; defaults to `serve`
+- Runtime pip deps (Flask, Flask-WTF, waitress, argon2-cffi, APScheduler) are
+  installed in the image via `uv` (binary copied from `ghcr.io/astral-sh/uv`)
 - `EXPOSE 8080` documents the web server port; map it in `docker-compose.yml`
 - `HEALTHCHECK` polls `GET /healthz` via Python `urllib.request` (no curl needed)
 - `/config` volume: mount a host directory here; `settings.json` is stored inside
-- `run.sh` is a local smoke-test that runs the published image against a real dashcam
-  address with `DRY_RUN=1 RUN_ONCE=1` -- useful for sanity-checking image changes
+- `run.sh` is a local smoke-test that overrides the CMD with `sync --dry-run` to
+  exercise the image against a real dashcam without standing up the web server

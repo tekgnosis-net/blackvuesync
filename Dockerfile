@@ -9,14 +9,30 @@ LABEL org.opencontainers.image.authors="Alessandro Colomba"
 
 VOLUME ["/recordings"]
 
-RUN apk add --update bash python3 shadow tzdata \
+RUN apk add --update bash python3 shadow su-exec tzdata \
     && rm -rf /var/cache/apk/* \
     && useradd -UMr dashcam
+
+# pulls the uv binary from Astral's pinned image. uv installs runtime deps much
+# faster than pip and reuses pyproject.toml-pinned versions consistently across
+# dev and image builds. NOTE: this COPY adds the uv binary to its own layer;
+# the rm in the RUN below shrinks the working tree but does not reclaim the
+# COPY layer's bytes. Phase G will migrate to a multi-stage build to drop uv
+# from the final image entirely.
+COPY --from=ghcr.io/astral-sh/uv:0.11.15 /uv /usr/local/bin/uv
+
+# installs Python runtime deps into the system interpreter. Alpine's Python is
+# marked PEP 668 externally-managed, so --break-system-packages is required;
+# this is safe inside a container we own and run.
+RUN uv pip install --system --break-system-packages --no-cache \
+        "Flask~=3.1" "Flask-WTF~=1.2" "waitress~=3.0" \
+        "argon2-cffi~=23.1" "APScheduler~=3.10" \
+    && rm /usr/local/bin/uv
 
 COPY COPYING /
 COPY setuid.sh /setuid.sh
 COPY entrypoint.sh /entrypoint.sh
-COPY crontab /var/spool/cron/crontabs/dashcam
+RUN chmod +x /entrypoint.sh
 
 ENV ADDRESS="" \
     PUID="" \
@@ -34,13 +50,8 @@ ENV ADDRESS="" \
     METRICS_JOB="" \
     METRICS_INSTANCE="" \
     METRICS_STATE_FILE="" \
-    CRON=1 \
     DRY_RUN="" \
-    RUN_ONCE="" \
     AFFINITY_KEY=""
-
-COPY --chown=dashcam blackvuesync.sh /blackvuesync.sh
-RUN chmod +x /blackvuesync.sh
 
 COPY --chown=dashcam blackvuesync /app/blackvuesync
 ENV PYTHONPATH=/app
