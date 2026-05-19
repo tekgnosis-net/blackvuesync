@@ -506,8 +506,10 @@ Returns 404 when no sync is active:
 
 ## HTMX Fragment Endpoints (additions)
 
-Four new card fragments, each polled every 5 seconds by HTMX. Each fragment
-renders the matching `_partials/*.html` template.
+Four new card fragments. Each fragment renders the matching
+`_partials/*.html` template, which includes an `hx-trigger="every 5s"`
+attribute so the card self-polls once a dashboard template (Phase 2B)
+embeds it. No client currently mounts these fragments.
 
 - `GET /hx/storage-card` -- renders `_partials/storage_card.html` with the
   same data as `/api/health/storage`
