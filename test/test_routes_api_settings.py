@@ -148,3 +148,28 @@ class TestPatchSettings:
         after = store.get().auth
         assert after.password_hash == before
         assert after.username == "operator"
+
+
+class TestCsrf:
+    """tests that PATCH /api/settings/* requires a CSRF token."""
+
+    def test_patch_without_csrf_returns_400(self, settings_path: Path) -> None:
+        store = _make_store(settings_path)
+        pw_hash = hash_password("test-password-1234")
+        store.update(
+            lambda s: dataclasses.replace(
+                s,
+                auth=dataclasses.replace(
+                    s.auth, username="admin", password_hash=pw_hash
+                ),
+            )
+        )
+        # builds an app with CSRF enabled
+        app = create_app(store, testing=False)
+        app.config["WTF_CSRF_ENABLED"] = True
+        app.config["TESTING"] = True
+        with app.test_client() as client:
+            with client.session_transaction() as sess:
+                sess["user"] = "admin"
+            resp = client.patch("/api/settings/sync", json={"grouping": "daily"})
+        assert resp.status_code == 400

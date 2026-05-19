@@ -162,3 +162,37 @@ class TestRotateSessions:
         with app.test_client() as client:
             resp = client.delete("/api/auth/sessions")
         assert resp.status_code == 302
+
+
+class TestCsrf:
+    """tests that POST /api/auth/password and DELETE /api/auth/sessions
+    require a CSRF token."""
+
+    def _csrf_app(self, settings_path: Path):  # type: ignore[no-untyped-def]
+        store = _make_store(settings_path)
+        _seed_admin(store)
+        app = create_app(store, testing=False)
+        app.config["WTF_CSRF_ENABLED"] = True
+        app.config["TESTING"] = True
+        return app
+
+    def test_password_post_without_csrf_returns_400(self, settings_path: Path) -> None:
+        app = self._csrf_app(settings_path)
+        with app.test_client() as client:
+            with client.session_transaction() as sess:
+                sess["user"] = "admin"
+            resp = client.post(
+                "/api/auth/password",
+                json={"current_password": "x", "new_password": "y" * 20},
+            )
+        assert resp.status_code == 400
+
+    def test_sessions_delete_without_csrf_returns_400(
+        self, settings_path: Path
+    ) -> None:
+        app = self._csrf_app(settings_path)
+        with app.test_client() as client:
+            with client.session_transaction() as sess:
+                sess["user"] = "admin"
+            resp = client.delete("/api/auth/sessions")
+        assert resp.status_code == 400
