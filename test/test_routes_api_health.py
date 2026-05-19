@@ -87,6 +87,21 @@ class TestStorage:
         body = json.loads(resp.data)
         assert body["recording_count"] == 2
 
+    def test_does_not_count_files_with_prefix_match(
+        self, logged_in_client: Any
+    ) -> None:
+        """fullmatch (not match) protects against suffix-bearing files like .bak."""
+        client, _, destination = logged_in_client
+        # the valid recording
+        (destination / "20231015_120000_NF.mp4").write_text("x")
+        # files that match the prefix but shouldn't count
+        (destination / "20231015_120000_NF.mp4.bak").write_text("y")
+        (destination / "20231015_120000_NF.mp4.partial").write_text("z")
+
+        resp = client.get("/api/health/storage")
+        body = json.loads(resp.data)
+        assert body["recording_count"] == 1
+
     def test_returns_unavailable_for_missing_destination(
         self, settings_path: Path, tmp_path: Path
     ) -> None:

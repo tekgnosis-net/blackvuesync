@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 from pathlib import Path
 
 from flask import Blueprint, Response, current_app
@@ -22,7 +23,7 @@ def _count_recordings(destination: Path) -> int:
     count = 0
     for _, _, files in os.walk(destination):
         for name in files:
-            if filename_re.match(name):
+            if filename_re.fullmatch(name):
                 count += 1
     return count
 
@@ -31,23 +32,23 @@ def _compute_storage(destination: Path) -> dict[str, object]:
     """computes storage stats for destination; returns a JSON-serializable dict.
 
     factored out so /api/health/storage and /hx/storage-card both share the
-    same computation. when destination does not exist, returns
+    same computation. uses shutil.disk_usage for consistency with sync.py's
+    max_used_disk_percent threshold check (root-reserved blocks count as
+    free, matching what the sync engine sees).
+    when destination does not exist, returns
     {available: False, reason: ...} matching the structural-case contract.
     """
     if not destination.exists():
         return {"available": False, "reason": "destination not configured"}
 
-    stats = os.statvfs(destination)
-    total_bytes = stats.f_blocks * stats.f_frsize
-    free_bytes = stats.f_bavail * stats.f_frsize
-    used_bytes = total_bytes - free_bytes
-    used_percent = round((used_bytes / total_bytes) * 100, 1) if total_bytes else 0.0
+    usage = shutil.disk_usage(destination)
+    used_percent = round((usage.used / usage.total) * 100, 1) if usage.total else 0.0
     return {
         "available": True,
         "destination": str(destination),
-        "total_bytes": total_bytes,
-        "free_bytes": free_bytes,
-        "used_bytes": used_bytes,
+        "total_bytes": usage.total,
+        "free_bytes": usage.free,
+        "used_bytes": usage.used,
         "used_percent": used_percent,
         "recording_count": _count_recordings(destination),
     }
