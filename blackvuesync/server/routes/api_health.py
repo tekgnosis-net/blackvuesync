@@ -81,13 +81,14 @@ def _compute_dashcam(address: str, timeout: float = 2.0) -> dict[str, object]:
     if not address:
         return {"reachable": False, "reason": "no address configured"}
 
-    url = f"http://{address}/blackvue_vod.cgi"  # NOSONAR (HTTP-only firmware)
+    # BlackVue dashcams expose HTTP only (no https firmware). The trailing
+    # NOSONAR on the next line suppresses python:S5332.
+    url = f"http://{address}/blackvue_vod.cgi"  # NOSONAR
     req = urllib.request.Request(url, method="HEAD")
     start = time.monotonic()
     try:
-        with urllib.request.urlopen(
-            req, timeout=timeout
-        ):  # NOSONAR (HTTP-only firmware)
+        # NOSONAR suppresses python:S5332 (HTTP-only firmware; see above).
+        with urllib.request.urlopen(req, timeout=timeout):  # NOSONAR
             elapsed_ms = round((time.monotonic() - start) * 1000, 1)
             return {
                 "reachable": True,

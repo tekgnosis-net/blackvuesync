@@ -13,6 +13,8 @@ from blackvuesync.settings import SettingsStore
 
 hx_dashboard_bp = Blueprint("hx_dashboard_bp", __name__, url_prefix="/hx")
 
+_MIME_HTML = "text/html"
+
 
 def _next_human(cron_expression: str, timezone: str) -> str:
     """returns a human-readable description of the next cron tick.
@@ -54,7 +56,7 @@ def storage_card() -> Response:
     ctx = _compute_storage(destination)
     return Response(
         render_template("_partials/storage_card.html", **ctx),
-        mimetype="text/html",
+        mimetype=_MIME_HTML,
     )
 
 
@@ -67,7 +69,7 @@ def dashcam_card() -> Response:
     ctx = _compute_dashcam(address)
     return Response(
         render_template("_partials/dashcam_card.html", **ctx),
-        mimetype="text/html",
+        mimetype=_MIME_HTML,
     )
 
 
@@ -86,7 +88,7 @@ def next_scheduled_card() -> Response:
             timezone=schedule.timezone,
             next_human=next_human,
         ),
-        mimetype="text/html",
+        mimetype=_MIME_HTML,
     )
 
 
@@ -99,7 +101,7 @@ def recent_activity_card() -> Response:
     ctx = _compute_recent(destination, _DEFAULT_LIMIT)
     return Response(
         render_template("_partials/recent_activity_card.html", **ctx),
-        mimetype="text/html",
+        mimetype=_MIME_HTML,
     )
 
 
