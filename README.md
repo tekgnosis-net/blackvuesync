@@ -284,7 +284,9 @@ The first-run wizard will prompt for a new password.
 
 ##### Overview
 
-The [ghcr.io/tekgnosis-net/blackvuesync](https://github.com/tekgnosis-net/blackvuesync/pkgs/container/blackvuesync) docker image sets up a cron job internal to the container that runs the synchronization operation every 15 minutes.
+The [ghcr.io/tekgnosis-net/blackvuesync](https://github.com/tekgnosis-net/blackvuesync/pkgs/container/blackvuesync) docker image runs the long-running web service that schedules sync operations internally.
+
+Sync is now scheduler-driven inside the long-running web service. The `CRON` and `RUN_ONCE` environment variables of the cron-era image have been retired. To trigger an on-demand sync, POST to `/api/sync/now`. To change the schedule, edit `settings.schedule.cron_expression` in `settings.json` (default `*/15 * * * *`).
 
 ##### Quick Start
 
@@ -296,9 +298,9 @@ docker run -it --rm \
     -v $PWD:/recordings \
     -e DRY_RUN=1 \
     -e VERBOSE=1 \
-    -e RUN_ONCE=1 \
     --name blackvuesync \
-ghcr.io/tekgnosis-net/blackvuesync
+    ghcr.io/tekgnosis-net/blackvuesync \
+    python -m blackvuesync sync --dry-run dashcam.example.net --destination /recordings
 ```
 
 Once that works, a typical invocation would be similar to:
@@ -387,9 +389,7 @@ Other parameters:
 * `METRICS_JOB`: Sets the Pushgateway job grouping value. (Default: `blackvuesync`.)
 * `METRICS_INSTANCE`: Sets the Pushgateway instance grouping value. (Default: empty, meaning the dashcam address.)
 * `METRICS_STATE_FILE`: If set, stores cross-run metrics state at this path. (Default: empty, meaning `.blackvuesync.metrics-state.json` under the destination when metrics are enabled.)
-* `CRON`: Set by default, makes it so downloads of normal recordings and unexpected error conditions are logged. Can be set to `""` to disable.
 * `DRY_RUN`: If set to any value, makes it so that the script communicates what it would do without actually doing anything. (Default: empty.)
-* `RUN_ONCE`: If set to any value, the docker image runs the sync operation once and exits without setting up the cron job. (Default: empty. Not supported in Docker Compose.)
 
 ## License
 
