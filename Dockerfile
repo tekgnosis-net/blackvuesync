@@ -9,14 +9,14 @@ LABEL org.opencontainers.image.authors="Alessandro Colomba"
 
 VOLUME ["/recordings"]
 
-RUN apk add --update bash python3 shadow tzdata \
+RUN apk add --update bash python3 shadow su-exec tzdata \
     && rm -rf /var/cache/apk/* \
     && useradd -UMr dashcam
 
 COPY COPYING /
 COPY setuid.sh /setuid.sh
 COPY entrypoint.sh /entrypoint.sh
-COPY crontab /var/spool/cron/crontabs/dashcam
+RUN chmod +x /entrypoint.sh
 
 ENV ADDRESS="" \
     PUID="" \
@@ -34,13 +34,8 @@ ENV ADDRESS="" \
     METRICS_JOB="" \
     METRICS_INSTANCE="" \
     METRICS_STATE_FILE="" \
-    CRON=1 \
     DRY_RUN="" \
-    RUN_ONCE="" \
     AFFINITY_KEY=""
-
-COPY --chown=dashcam blackvuesync.sh /blackvuesync.sh
-RUN chmod +x /blackvuesync.sh
 
 COPY --chown=dashcam blackvuesync /app/blackvuesync
 ENV PYTHONPATH=/app
