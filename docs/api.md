@@ -221,3 +221,158 @@ progress bar, and current file information.
 
 Returns the `last-run-card` HTML partial showing the most recently completed
 sync run (files synced, bytes downloaded, completion state).
+
+---
+
+## Settings API Endpoints
+
+All endpoints below require authentication (subject to `auth.mode`).
+CSRF protection applies to all `PATCH` requests (Flask-WTF global protection).
+
+### `GET /api/settings`
+
+Returns the full settings object as JSON. Every section carries a `_tier`
+annotation (`immediate`, `next_tick`, or `restart`) indicating how quickly
+a change to that section propagates. Secret fields (currently
+`auth.password_hash` and `auth.session_secret`) are always replaced with the
+sentinel string `"***"` regardless of whether they are empty. This prevents
+the redacted snapshot from leaking the first-run state (`password_hash == ""`)
+and lets clients safely round-trip the response back through a `PATCH`.
+
+**Response (200 OK), truncated example:**
+
+```json
+{
+  "version": 1,
+  "connection": {
+    "address": "192.168.0.1",
+    "timeout_seconds": 10.0,
+    "_tier": "restart"
+  },
+  "auth": {
+    "mode": "login",
+    "username": "admin",
+    "password_hash": "***",
+    "session_secret": "***",
+    "trusted_proxies": [],
+    "_tier": "immediate"
+  },
+  "sync": {
+    "priority": "date",
+    "grouping": "none",
+    "include": [],
+    "exclude": [],
+    "retry_failed_after": "1d",
+    "skip_metadata": [],
+    "_tier": "next_tick"
+  }
+}
+```
+
+### `PATCH /api/settings/<section>`
+
+Updates a single settings section partially. The request body is a JSON
+object containing only the fields to change; missing fields are left
+unchanged. Fields whose value is the redaction sentinel `"***"` are stripped
+before applying, so a client may post back the full GET response without
+overwriting secrets. JSON arrays are coerced to tuples for the
+`sync.include`, `sync.exclude`, and `sync.skip_metadata` fields so the
+in-memory dataclass remains tuple-typed (JSON has no tuple).
+
+**Request body example (`PATCH /api/settings/sync`):**
+
+```json
+{
+  "priority": "rdate",
+  "include": ["P", "NF"]
+}
+```
+
+**Response (200 OK):**
+
+```json
+{"section": "sync", "tier": "next_tick", "applied": true}
+```
+
+**Error responses:**
+
+- `400 Bad Request` -- `INVALID_BODY` when the request body is not a JSON object.
+- `404 Not Found` -- `SECTION_NOT_FOUND` when `<section>` is not a known
+  settings section.
+- `422 Unprocessable Entity` -- `SETTINGS_INVALID` when the payload contains
+  an unknown field or fails section-level validation. The `details.field_errors`
+  array enumerates the failing paths and messages.
+
+```json
+{
+  "error": "settings validation failed",
+  "code": "SETTINGS_INVALID",
+  "details": {
+    "field_errors": [
+      {"path": "sync.priority", "message": "must be one of date, rdate, type"}
+    ]
+  }
+}
+```
+
+---
+
+## Auth API Endpoints
+
+All endpoints below require authentication (subject to `auth.mode`).
+CSRF protection applies to all `POST` and `DELETE` requests.
+
+### `GET /api/auth/me`
+
+Returns the current authenticated user and the active auth mode. The mode is
+read fresh from the settings store on every request, so a mode change in
+`/config/settings.json` takes effect immediately without a restart.
+
+**Response (200 OK):**
+
+```json
+{"username": "admin", "mode": "login"}
+```
+
+### `POST /api/auth/password`
+
+Changes the current user's password. Requires the current password as well
+as the new password (minimum 12 characters). Failures consume the same
+rate-limit bucket as `POST /login` (10 failures from the same IP within
+600 seconds triggers a 15-minute lockout).
+
+**Request body:**
+
+```json
+{"current_password": "<old>", "new_password": "<new>"}
+```
+
+**Response (200 OK):**
+
+```json
+{"applied": true}
+```
+
+**Error responses:**
+
+- `400 Bad Request` -- `INVALID_BODY` when the request body is not a JSON object.
+- `401 Unauthorized` -- `INVALID_CURRENT_PASSWORD` when the current password
+  does not match the stored hash; also increments the rate-limit bucket.
+- `422 Unprocessable Entity` -- `WEAK_PASSWORD` when the new password is
+  shorter than 12 characters.
+- `429 Too Many Requests` -- `RATE_LIMITED` when the IP has exceeded the
+  shared `/login` failure threshold.
+
+### `DELETE /api/auth/sessions`
+
+Rotates the session secret (`auth.session_secret`) to a fresh random value.
+All existing sessions become invalid once the new secret is loaded. Flask
+reads `SECRET_KEY` once at `create_app()` time, so the running process
+continues using the old secret until restart; the response makes this
+explicit with `restart_required: true`.
+
+**Response (200 OK):**
+
+```json
+{"rotated": true, "restart_required": true}
+```

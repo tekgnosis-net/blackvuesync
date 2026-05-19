@@ -418,6 +418,12 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
 def cmd_serve(args: argparse.Namespace) -> int:
     """starts the web server and APScheduler; blocks until interrupted."""
+    # configures logging using the settings.logging section once we have
+    # loaded the settings store below. for now configure with defaults so
+    # startup messages (including settings-load errors) are visible.
+    configure_logging("text")
+    set_logging_levels(1, False)
+
     # deferred imports keep these optional at module load time; the sync
     # subcommand does not need flask, waitress, or apscheduler.
     # pylint: disable=import-outside-toplevel
@@ -431,9 +437,21 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
     config_path = Path(args.config_path) if args.config_path else _DEFAULT_SETTINGS_PATH
     store = SettingsStore(config_path)
+    settings = store.get()
+    # re-applies log format and level now that settings are loaded.
+    # configure_logging is idempotent: it iterates existing handlers and calls
+    # setFormatter, so the second call replaces the bootstrap formatter without
+    # duplicating handlers. serve mode keeps a floor of INFO so scheduler /
+    # waitress startup lines always emit regardless of the user's verbose
+    # setting (operators need to see them in docker logs); quiet=true still
+    # suppresses everything below ERROR.
+    configure_logging(settings.logging.format)
+    if settings.logging.quiet:
+        set_logging_levels(-1, False)
+    else:
+        set_logging_levels(max(1, settings.logging.verbose), False)
     publisher = ProgressPublisher()
     app = create_app(store, progress_publisher=publisher)
-    settings = store.get()
     port = args.port if args.port is not None else settings.web.port
 
     scheduler = init_scheduler(store, publisher)
