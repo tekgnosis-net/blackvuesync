@@ -29,10 +29,13 @@ def _build_trigger(settings: Settings) -> CronTrigger:
 def _scheduled_run(store: SettingsStore, publisher: ProgressPublisher) -> None:
     """job function: triggers a sync via the shared trigger_sync entrypoint.
 
-    settings are read fresh on each tick so updates to e.g. address or
-    timeout apply on the next scheduled run without a restart.
+    settings are read fresh on each tick so updates to e.g. address, timeout,
+    or schedule.paused apply on the next scheduled run without a restart.
     """
     settings = store.get()
+    if settings.schedule.paused:
+        logger.info("scheduled sync skipped: schedule is paused")
+        return
     result = trigger_sync(settings, publisher)
     if result["status"] == "already_running":
         logger.info(
