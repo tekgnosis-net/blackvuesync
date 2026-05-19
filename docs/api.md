@@ -376,3 +376,148 @@ explicit with `restart_required: true`.
 ```json
 {"rotated": true, "restart_required": true}
 ```
+
+---
+
+## Health API Endpoints
+
+### `GET /api/health/storage`
+
+Returns storage usage at the destination directory. Uses `shutil.disk_usage`
+so the `used_percent` value matches what the sync engine sees for its
+`max_used_disk_percent` threshold check (root-reserved blocks count as free).
+
+```json
+{
+  "available": true,
+  "destination": "/recordings",
+  "total_bytes": 137438953472,
+  "free_bytes": 50725394432,
+  "used_bytes": 86713559040,
+  "used_percent": 63.1,
+  "recording_count": 481
+}
+```
+
+When the destination does not exist on disk:
+
+```json
+{"available": false, "reason": "destination not configured"}
+```
+
+### `GET /api/health/dashcam`
+
+HEAD-probes `http://<settings.connection.address>/blackvue_vod.cgi` with a
+2-second timeout. The fixed timeout intentionally diverges from
+`connection.timeout_seconds` so a slow dashcam does not block the dashboard.
+
+Success:
+
+```json
+{"reachable": true, "address": "192.168.1.50", "latency_ms": 38.0}
+```
+
+Failure (`URLError` wrapping a timeout is classified as `reason: "timeout"`
+for ui consistency with `socket.timeout`):
+
+```json
+{"reachable": false, "address": "192.168.1.50", "reason": "timeout"}
+```
+
+When no address is configured:
+
+```json
+{"reachable": false, "reason": "no address configured"}
+```
+
+---
+
+## Recordings API Endpoints
+
+### `GET /api/recordings/recent`
+
+Returns the N most recently modified BlackVue recordings at the destination
+(matched via `filename_re.fullmatch`). Default `limit` is 5; clamped to
+`[1, 50]` via query param `?limit=N`.
+
+```json
+{
+  "recordings": [
+    {
+      "filename": "20231015_120000_NF.mp4",
+      "mtime": 1697371200.0,
+      "path": "/recordings/20231015_120000_NF.mp4"
+    }
+  ],
+  "total": 1
+}
+```
+
+---
+
+## Schedule API Endpoints
+
+### `POST /api/schedule/pause`
+
+Sets `settings.schedule.paused = true`. The next scheduled sync is skipped
+(the scheduler logs `scheduled sync skipped: schedule is paused`). Manual
+`POST /api/sync/now` is unaffected -- operators can still trigger ad-hoc
+syncs.
+
+```json
+{"paused": true}
+```
+
+### `POST /api/schedule/resume`
+
+Sets `settings.schedule.paused = false`. Idempotent: returns 200 even when
+the schedule was already running.
+
+```json
+{"paused": false}
+```
+
+---
+
+## Sync API Endpoints (additions)
+
+### `POST /api/sync/stop`
+
+Requests cooperative stop of the active sync. The download chunk loop in
+`sync.py` checks the stop flag between chunks and raises
+`UserWarning("sync stopped by user")` on its next boundary, which the
+existing exception classifier routes through the normal `failed` exit path.
+The partial `.filename.mp4` dotfile survives; the next sync resumes it
+naturally.
+
+Returns 202 when a sync was running:
+
+```json
+{"job_id": "deadbeef...", "stopping": true}
+```
+
+Returns 404 when no sync is active:
+
+```json
+{"error": "no sync is running", "code": "SYNC_NOT_RUNNING", "details": {}}
+```
+
+---
+
+## HTMX Fragment Endpoints (additions)
+
+Four new card fragments. Each fragment renders the matching
+`_partials/*.html` template, which includes an `hx-trigger="every 5s"`
+attribute so the card self-polls once a dashboard template (Phase 2B)
+embeds it. No client currently mounts these fragments.
+
+- `GET /hx/storage-card` -- renders `_partials/storage_card.html` with the
+  same data as `/api/health/storage`
+- `GET /hx/dashcam-card` -- renders `_partials/dashcam_card.html` with the
+  same data as `/api/health/dashcam`
+- `GET /hx/next-scheduled-card` -- renders
+  `_partials/next_scheduled_card.html` with the next cron fire time, paused
+  flag, cron expression, and timezone
+- `GET /hx/recent-activity-card` -- renders
+  `_partials/recent_activity_card.html` with the same data as
+  `/api/recordings/recent` (default `limit=5`)

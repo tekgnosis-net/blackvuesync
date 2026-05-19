@@ -81,6 +81,7 @@ class ScheduleSettings:
 
     cron_expression: str = "*/15 * * * *"
     timezone: str = "UTC"
+    paused: bool = False
 
     def validate(self) -> list[str]:
         """validates schedule settings; returns a list of error strings."""

@@ -1,0 +1,20 @@
+{# storage card fragment. polled every 5s by HTMX. #}
+<div class="card"
+     id="storage-card"
+     hx-get="/hx/storage-card"
+     hx-trigger="every 5s"
+     hx-swap="outerHTML">
+  <div class="card-label">Storage</div>
+  {% if available %}
+    <div class="card-value">{{ used_percent }}% used</div>
+    <div class="card-sub">
+      {{ (free_bytes / 1073741824) | round(1) }} GB free of
+      {{ (total_bytes / 1073741824) | round(1) }} GB ·
+      {{ recording_count }} recordings
+    </div>
+    <div class="storage-bar"><div style="width: {{ used_percent }}%"></div></div>
+  {% else %}
+    <div class="card-value">--</div>
+    <div class="card-sub">{{ reason }}</div>
+  {% endif %}
+</div>

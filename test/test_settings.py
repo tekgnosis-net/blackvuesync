@@ -975,3 +975,35 @@ def test_load_logs_validation_errors(
 
     messages = [r.message for r in caplog.records]
     assert any("priority" in m for m in messages)
+
+
+class TestSchedulePaused:
+    """tests for the schedule.paused field added in sub-project #2."""
+
+    def test_paused_defaults_to_false(self, tmp_path: Path) -> None:
+        """new ScheduleSettings has paused=False by default."""
+        with patch.dict(os.environ, {"ADDRESS": "192.168.0.1"}, clear=False):
+            store = SettingsStore(tmp_path / "settings.json")
+        assert store.get().schedule.paused is False
+
+    def test_paused_persists_round_trip(self, tmp_path: Path) -> None:
+        """setting paused=True persists to disk and survives a reload."""
+        path = tmp_path / "settings.json"
+        with patch.dict(os.environ, {"ADDRESS": "192.168.0.1"}, clear=False):
+            store = SettingsStore(path)
+            store.update(
+                lambda s: dataclasses.replace(
+                    s, schedule=dataclasses.replace(s.schedule, paused=True)
+                )
+            )
+        # reload from disk
+        with patch.dict(os.environ, {"ADDRESS": "192.168.0.1"}, clear=False):
+            store2 = SettingsStore(path)
+        assert store2.get().schedule.paused is True
+
+    def test_paused_validate_accepts_any_bool(self) -> None:
+        """validate() returns no errors for either paused value."""
+        from blackvuesync.settings import ScheduleSettings
+
+        assert ScheduleSettings(paused=False).validate() == []
+        assert ScheduleSettings(paused=True).validate() == []

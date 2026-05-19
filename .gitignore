@@ -25,3 +25,4 @@ __pycache__
 
 # claude-code local tooling symlink (per-developer plugin cache)
 /supertool
+.superpowers/

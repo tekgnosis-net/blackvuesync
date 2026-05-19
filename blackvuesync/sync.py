@@ -16,6 +16,7 @@ import re
 import shutil
 import socket
 import stat
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -153,6 +154,29 @@ VALID_METADATA_TYPES = frozenset("t3g")
 
 # download chunk size in bytes
 DOWNLOAD_CHUNK_SIZE = 1024 * 1024
+
+# cooperative stop flag for the active sync. set by /api/sync/stop,
+# checked by the download chunk loop between reads, cleared by trigger_sync
+# at the start of each new sync.
+_stop_event: threading.Event = threading.Event()
+
+
+def request_stop() -> None:
+    """requests cooperative stop of the active sync; the download loop will
+    raise UserWarning("sync stopped by user") on its next chunk-boundary check."""
+    _stop_event.set()
+
+
+def clear_stop() -> None:
+    """clears the stop flag; called by trigger_sync before each new sync run."""
+    _stop_event.clear()
+
+
+def is_stop_requested() -> bool:
+    """returns True if request_stop has been called and clear_stop has not
+    yet reset the flag."""
+    return _stop_event.is_set()
+
 
 # valid recording type and direction characters
 #
@@ -577,7 +601,15 @@ def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arg
                 downloaded_bytes = 0
                 total_bytes = int(size) if size else 0
                 with open(temp_filepath, "wb") as f:
-                    while chunk := response.read(DOWNLOAD_CHUNK_SIZE):
+                    while True:
+                        chunk = response.read(DOWNLOAD_CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        # cooperative stop check between read and write; the
+                        # exception propagates to classify_run_failure and the
+                        # job ends as failed.
+                        if is_stop_requested():
+                            raise UserWarning("sync stopped by user")
                         f.write(chunk)
                         downloaded_bytes += len(chunk)
                         if on_chunk is not None:

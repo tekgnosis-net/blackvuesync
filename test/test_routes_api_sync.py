@@ -366,3 +366,68 @@ class TestProgressStream:
         with app.test_client() as client:
             resp = client.get("/api/sync/progress/stream")
         assert resp.status_code == 302
+
+
+class TestStopSync:
+    """tests for POST /api/sync/stop."""
+
+    def test_returns_202_when_sync_is_running(self, logged_in_client: Any) -> None:
+        """when state is running, stop sets the flag and returns 202."""
+        client, pub = logged_in_client
+
+        # put the publisher into a running state
+        pub.begin_job(5)
+
+        from blackvuesync.sync import clear_stop, is_stop_requested
+
+        clear_stop()
+        try:
+            resp = client.post("/api/sync/stop")
+            assert resp.status_code == 202
+            body = json.loads(resp.data)
+            assert body["stopping"] is True
+            assert body["job_id"] == pub.snapshot().job_id
+            assert is_stop_requested() is True
+        finally:
+            # cleanup runs even if any assertion above failed, preventing
+            # module-level _stop_event state from leaking into later tests
+            clear_stop()
+            pub.end_job(success=False)
+
+    def test_returns_404_when_no_sync_is_running(self, logged_in_client: Any) -> None:
+        """when state is idle, stop returns 404 SYNC_NOT_RUNNING."""
+        client, _ = logged_in_client
+        resp = client.post("/api/sync/stop")
+        assert resp.status_code == 404
+        body = json.loads(resp.data)
+        assert body["code"] == "SYNC_NOT_RUNNING"
+
+    def test_redirects_to_login_when_not_authenticated(
+        self, settings_path: Path
+    ) -> None:
+        """/api/sync/stop requires authentication."""
+        app, _ = _make_app(settings_path)
+        with app.test_client() as client:
+            resp = client.post("/api/sync/stop")
+        assert resp.status_code == 302
+
+    def test_requires_csrf_token(self, settings_path: Path) -> None:
+        """POST /api/sync/stop requires a CSRF token when CSRF is enabled."""
+        store = _make_store(settings_path)
+        pw_hash = hash_password("test-password-1234")
+        store.update(
+            lambda s: dataclasses.replace(
+                s,
+                auth=dataclasses.replace(
+                    s.auth, username="admin", password_hash=pw_hash
+                ),
+            )
+        )
+        app = create_app(store, testing=False)
+        app.config["WTF_CSRF_ENABLED"] = True
+        app.config["TESTING"] = True
+        with app.test_client() as client:
+            with client.session_transaction() as sess:
+                sess["user"] = "admin"
+            resp = client.post("/api/sync/stop")
+        assert resp.status_code == 400
