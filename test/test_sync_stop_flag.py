@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from unittest.mock import MagicMock, patch
 
 from blackvuesync.server.progress import ProgressPublisher
@@ -49,7 +50,12 @@ class TestTriggerSyncClearsStopFlag:
 
     def test_trigger_sync_clears_stale_stop_flag(self) -> None:
         """if a previous run left the flag set, trigger_sync clears it before
-        the next run so we don't immediately abort."""
+        the next run so we don't immediately abort.
+
+        captures the flag value as observed from inside the daemon thread
+        and asserts on it from the main thread. an in-thread assert would
+        be swallowed by threading.excepthook and never fail the test.
+        """
         from blackvuesync.sync import is_stop_requested, request_stop
 
         # simulate a stale stop flag from a previous run
@@ -69,18 +75,20 @@ class TestTriggerSyncClearsStopFlag:
         settings.sync.exclude = None
         settings.retention.max_used_disk_percent = 90
 
-        def _check_then_noop(_s: object, p: ProgressPublisher, *, job_id: str) -> None:
-            """asserts the flag is clear inside the spawned thread."""
-            assert is_stop_requested() is False
+        observed: list[bool] = []
+        thread_done = threading.Event()
+
+        def _capture(_s: object, p: ProgressPublisher, *, job_id: str) -> None:
+            """captures the flag value the thread sees; signals via Event."""
+            observed.append(is_stop_requested())
             p.begin_job(0, job_id=job_id)
             p.end_job(success=True)
+            thread_done.set()
 
-        with patch(
-            "blackvuesync.server.sync_runner._do_sync", side_effect=_check_then_noop
-        ):
+        with patch("blackvuesync.server.sync_runner._do_sync", side_effect=_capture):
             result = trigger_sync(settings, publisher)
-            # give the daemon thread a moment to run the assertion
-            import time
+            # wait deterministically for the thread to finish; 2s ceiling
+            assert thread_done.wait(timeout=2.0), "daemon thread did not finish"
 
-            time.sleep(0.1)
-            assert result["status"] == "started"
+        assert result["status"] == "started"
+        assert observed == [False], f"thread observed stale flag: {observed}"
