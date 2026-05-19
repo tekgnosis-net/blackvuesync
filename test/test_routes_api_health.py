@@ -125,3 +125,63 @@ class TestStorage:
         with app.test_client() as client:
             resp = client.get("/api/health/storage")
         assert resp.status_code == 302
+
+
+class TestDashcam:
+    """tests for GET /api/health/dashcam."""
+
+    def test_returns_reachable_true_on_success(self, logged_in_client: Any) -> None:
+        """when the HEAD probe succeeds, reachable=true with latency_ms set."""
+        client, _, _ = logged_in_client
+        # mock urlopen to simulate a successful HEAD response
+        with patch("urllib.request.urlopen") as mock_open:
+            mock_open.return_value.__enter__.return_value.status = 200
+            resp = client.get("/api/health/dashcam")
+        assert resp.status_code == 200
+        body = json.loads(resp.data)
+        assert body["reachable"] is True
+        assert "latency_ms" in body
+        assert body["address"] == "192.168.0.1"
+
+    def test_returns_reachable_false_on_timeout(self, logged_in_client: Any) -> None:
+        """when the HEAD probe times out, reachable=false with reason=timeout."""
+        import socket
+
+        client, _, _ = logged_in_client
+        with patch("urllib.request.urlopen", side_effect=socket.timeout("timed out")):
+            resp = client.get("/api/health/dashcam")
+        assert resp.status_code == 200
+        body = json.loads(resp.data)
+        assert body["reachable"] is False
+        assert body["reason"] == "timeout"
+
+    def test_returns_reachable_false_on_connection_refused(
+        self, logged_in_client: Any
+    ) -> None:
+        """when the HEAD probe is refused, reachable=false with a reason."""
+        import urllib.error
+
+        client, _, _ = logged_in_client
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=urllib.error.URLError("Connection refused"),
+        ):
+            resp = client.get("/api/health/dashcam")
+        assert resp.status_code == 200
+        body = json.loads(resp.data)
+        assert body["reachable"] is False
+        assert "reason" in body
+
+    def test_compute_dashcam_returns_no_address_when_empty(self) -> None:
+        """unit-test the _compute_dashcam helper with an empty address.
+
+        we cannot exercise this through the route because
+        ConnectionSettings.validate() rejects an empty address and
+        SettingsStore.update would refuse the change. testing the helper
+        directly is cleaner and covers the same code path.
+        """
+        from blackvuesync.server.routes.api_health import _compute_dashcam
+
+        result = _compute_dashcam("")
+        assert result["reachable"] is False
+        assert result["reason"] == "no address configured"

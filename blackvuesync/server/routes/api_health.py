@@ -5,6 +5,10 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import socket
+import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from flask import Blueprint, Response, current_app
@@ -61,6 +65,50 @@ def storage() -> Response:
     store: SettingsStore = current_app.settings_store  # type: ignore[attr-defined]
     destination = Path(store.get().system.destination)
     body = json.dumps(_compute_storage(destination))
+    return Response(body, status=200, mimetype=_MIME_JSON)
+
+
+def _compute_dashcam(address: str, timeout: float = 2.0) -> dict[str, object]:
+    """HEAD-probes http://<address>/blackvue_vod.cgi; returns reachability.
+
+    factored out so /api/health/dashcam and /hx/dashcam-card share the same
+    computation. blackvue dashcams expose http only (no https firmware).
+    """
+    if not address:
+        return {"reachable": False, "reason": "no address configured"}
+
+    url = f"http://{address}/blackvue_vod.cgi"  # NOSONAR (HTTP-only firmware)
+    req = urllib.request.Request(url, method="HEAD")
+    start = time.monotonic()
+    try:
+        with urllib.request.urlopen(
+            req, timeout=timeout
+        ):  # NOSONAR (HTTP-only firmware)
+            elapsed_ms = round((time.monotonic() - start) * 1000, 1)
+            return {
+                "reachable": True,
+                "address": address,
+                "latency_ms": elapsed_ms,
+            }
+    except socket.timeout:
+        return {"reachable": False, "address": address, "reason": "timeout"}
+    except urllib.error.URLError as e:
+        return {"reachable": False, "address": address, "reason": str(e.reason)}
+    except OSError as e:
+        return {
+            "reachable": False,
+            "address": address,
+            "reason": type(e).__name__.lower(),
+        }
+
+
+@api_health_bp.route("/dashcam", methods=["GET"])
+@login_required
+def dashcam() -> Response:
+    """returns dashcam reachability via HEAD probe."""
+    store: SettingsStore = current_app.settings_store  # type: ignore[attr-defined]
+    address = store.get().connection.address
+    body = json.dumps(_compute_dashcam(address))
     return Response(body, status=200, mimetype=_MIME_JSON)
 
 
