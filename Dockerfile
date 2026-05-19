@@ -13,8 +13,9 @@ RUN apk add --update bash python3 shadow su-exec tzdata \
     && rm -rf /var/cache/apk/* \
     && useradd -UMr dashcam
 
-# Pulls the uv binary from Astral's pinned image. uv installs runtime deps faster
-# than pip and handles Alpine's PEP 668 enforcement cleanly via --system.
+# Pulls the uv binary from Astral's pinned image. uv installs runtime deps much
+# faster than pip and reuses pyproject.toml-pinned versions consistently across
+# dev and image builds.
 COPY --from=ghcr.io/astral-sh/uv:0.11.15 /uv /usr/local/bin/uv
 
 # Installs Python runtime deps into the system interpreter. Alpine's Python is
