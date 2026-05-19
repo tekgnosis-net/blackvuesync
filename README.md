@@ -290,17 +290,18 @@ Sync is now scheduler-driven inside the long-running web service. The `CRON` and
 
 ##### Quick Start
 
-It's a good idea to do a single, interactive dry run first with verbose logging:
+It's a good idea to do a single, interactive dry run first with verbose logging.
+The image's default CMD is `serve`, which starts the long-running web service.
+Overriding the CMD with `sync ...` runs one sync attempt and exits, which is
+ideal for smoke-testing:
 
 ```sh
 docker run -it --rm \
     -e ADDRESS=dashcam.example.net \
     -v $PWD:/recordings \
-    -e DRY_RUN=1 \
-    -e VERBOSE=1 \
     --name blackvuesync \
     ghcr.io/tekgnosis-net/blackvuesync \
-    python -m blackvuesync sync --dry-run dashcam.example.net --destination /recordings
+    sync --dry-run --verbose dashcam.example.net --destination /recordings
 ```
 
 Once that works, a typical invocation would be similar to:

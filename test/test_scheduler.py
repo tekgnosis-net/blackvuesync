@@ -81,6 +81,34 @@ class TestInitScheduler:
         finally:
             scheduler.shutdown(wait=False)
 
+    def test_on_change_reschedules_when_only_timezone_changes(
+        self, settings_path: Path
+    ) -> None:
+        """changing schedule.timezone alone still triggers a reschedule.
+
+        CronTrigger.__str__ omits the timezone, so the assertion uses repr()
+        (which includes the timezone) and the trigger object identity.
+        """
+        store = _make_store(settings_path)
+        publisher = ProgressPublisher()
+        scheduler = init_scheduler(store, publisher)
+        try:
+            original = scheduler.get_job(_JOB_ID).trigger
+            # changes only timezone, keeps cron_expression
+            store.update(
+                lambda s: dataclasses.replace(
+                    s,
+                    schedule=dataclasses.replace(
+                        s.schedule, timezone="America/New_York"
+                    ),
+                )
+            )
+            new_trigger = scheduler.get_job(_JOB_ID).trigger
+            assert "America/New_York" in repr(new_trigger)
+            assert new_trigger is not original
+        finally:
+            scheduler.shutdown(wait=False)
+
 
 class TestScheduledRun:
     """tests for _scheduled_run job function."""
@@ -118,3 +146,22 @@ class TestScheduledRun:
             settings_arg, publisher_arg = mock_trigger.call_args.args
             assert settings_arg.connection.address == "192.168.0.1"
             assert publisher_arg is publisher
+
+    def test_propagates_exception_from_trigger_sync(self, settings_path: Path) -> None:
+        """exceptions from trigger_sync propagate so APScheduler logs them and
+        the next scheduled tick still fires (verified at the contract level: we
+        do not catch in _scheduled_run; APScheduler's job-error logging takes
+        over)."""
+        from blackvuesync.server.scheduler import _scheduled_run
+
+        store = _make_store(settings_path)
+        publisher = ProgressPublisher()
+
+        with (
+            patch(
+                "blackvuesync.server.scheduler.trigger_sync",
+                side_effect=RuntimeError("connection refused"),
+            ),
+            pytest.raises(RuntimeError, match="connection refused"),
+        ):
+            _scheduled_run(store, publisher)

@@ -13,15 +13,17 @@ RUN apk add --update bash python3 shadow su-exec tzdata \
     && rm -rf /var/cache/apk/* \
     && useradd -UMr dashcam
 
-# Pulls the uv binary from Astral's pinned image. uv installs runtime deps much
+# pulls the uv binary from Astral's pinned image. uv installs runtime deps much
 # faster than pip and reuses pyproject.toml-pinned versions consistently across
-# dev and image builds.
+# dev and image builds. NOTE: this COPY adds the uv binary to its own layer;
+# the rm in the RUN below shrinks the working tree but does not reclaim the
+# COPY layer's bytes. Phase G will migrate to a multi-stage build to drop uv
+# from the final image entirely.
 COPY --from=ghcr.io/astral-sh/uv:0.11.15 /uv /usr/local/bin/uv
 
-# Installs Python runtime deps into the system interpreter. Alpine's Python is
+# installs Python runtime deps into the system interpreter. Alpine's Python is
 # marked PEP 668 externally-managed, so --break-system-packages is required;
-# this is safe inside a container we own. The uv binary is removed in the same
-# layer so it does not bloat the runtime image.
+# this is safe inside a container we own and run.
 RUN uv pip install --system --break-system-packages --no-cache \
         "Flask~=3.1" "Flask-WTF~=1.2" "waitress~=3.0" \
         "argon2-cffi~=23.1" "APScheduler~=3.10" \

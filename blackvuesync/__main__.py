@@ -417,7 +417,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
-    """starts the web server and the cron scheduler; blocks until interrupted."""
+    """starts the web server and APScheduler; blocks until interrupted."""
     # deferred imports keep these optional at module load time; the sync
     # subcommand does not need flask, waitress, or apscheduler.
     # pylint: disable=import-outside-toplevel
