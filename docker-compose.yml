@@ -12,6 +12,9 @@ services:
       # Settings storage (settings.json lives here). Change the host path as needed.
       - ./config:/config:rw
     environment:
+      # Sync is scheduler-driven via settings.schedule.cron_expression (default
+      # */15 * * * *). On-demand triggers go through POST /api/sync/now.
+
       # Dashcam address
       # ADDRESS: dashcam.example.net
 
@@ -70,10 +73,6 @@ services:
 
       # If set, stores cross-run metrics state at this path.
       METRICS_STATE_FILE: ''
-
-      # Makes it so downloads of normal recordings and unexpected error
-      # conditions are logged. Can be set to '' to disable.
-      CRON: 1
 
       # If set to any value, makes it so that the script communicates what it
       # would do without actually doing anything.
