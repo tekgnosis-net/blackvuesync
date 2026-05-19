@@ -73,6 +73,10 @@ def _compute_dashcam(address: str, timeout: float = 2.0) -> dict[str, object]:
 
     factored out so /api/health/dashcam and /hx/dashcam-card share the same
     computation. blackvue dashcams expose http only (no https firmware).
+
+    uses a fixed 2 s timeout rather than settings.connection.timeout_seconds:
+    a dashboard HEAD probe should be quick (the card is polled every 5 s)
+    and a slower timeout would block the page rendering.
     """
     if not address:
         return {"reachable": False, "reason": "no address configured"}
@@ -93,6 +97,10 @@ def _compute_dashcam(address: str, timeout: float = 2.0) -> dict[str, object]:
     except socket.timeout:
         return {"reachable": False, "address": address, "reason": "timeout"}
     except urllib.error.URLError as e:
+        # urlopen wraps connect timeouts as URLError(reason=TimeoutError(...));
+        # mirrors sync.py's classification so the ui sees a consistent reason.
+        if isinstance(e.reason, (TimeoutError, socket.timeout)):
+            return {"reachable": False, "address": address, "reason": "timeout"}
         return {"reachable": False, "address": address, "reason": str(e.reason)}
     except OSError as e:
         return {

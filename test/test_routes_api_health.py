@@ -141,7 +141,13 @@ class TestDashcam:
         body = json.loads(resp.data)
         assert body["reachable"] is True
         assert "latency_ms" in body
+        assert isinstance(body["latency_ms"], (int, float))
         assert body["address"] == "192.168.0.1"
+        # verify the call shape locks the HEAD-probe contract
+        mock_open.assert_called_once()
+        req = mock_open.call_args.args[0]
+        assert req.get_method() == "HEAD"
+        assert req.full_url == "http://192.168.0.1/blackvue_vod.cgi"
 
     def test_returns_reachable_false_on_timeout(self, logged_in_client: Any) -> None:
         """when the HEAD probe times out, reachable=false with reason=timeout."""
@@ -151,6 +157,21 @@ class TestDashcam:
         with patch("urllib.request.urlopen", side_effect=socket.timeout("timed out")):
             resp = client.get("/api/health/dashcam")
         assert resp.status_code == 200
+        body = json.loads(resp.data)
+        assert body["reachable"] is False
+        assert body["reason"] == "timeout"
+
+    def test_url_error_wrapped_timeout_classifies_as_timeout(
+        self, logged_in_client: Any
+    ) -> None:
+        """connect timeouts arrive as URLError(reason=TimeoutError); the helper
+        must still classify them as reason='timeout' for ui consistency."""
+        import urllib.error
+
+        client, _, _ = logged_in_client
+        wrapped = urllib.error.URLError(reason=TimeoutError("connect timed out"))
+        with patch("urllib.request.urlopen", side_effect=wrapped):
+            resp = client.get("/api/health/dashcam")
         body = json.loads(resp.data)
         assert body["reachable"] is False
         assert body["reason"] == "timeout"
