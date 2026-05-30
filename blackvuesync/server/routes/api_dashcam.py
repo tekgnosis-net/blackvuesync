@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import configparser
 import json
-import socket
-import urllib.error
 import urllib.request
 
 from flask import Blueprint, Response, current_app
@@ -37,14 +35,14 @@ def _fetch_text(url: str, timeout: float) -> str | None:
     """GETs url and returns its decoded body, or None on any failure.
 
     decodes with errors='replace' because version.bin is a binary-ish blob;
-    callers clean it further. blackvue firmware is http-only, hence NOSONAR.
+    callers clean it further. blackvue firmware is http-only (no https variant
+    exists).
     """
     try:
-        # NOSONAR suppresses python:S5332 (http-only firmware).
         with urllib.request.urlopen(url, timeout=timeout) as resp:  # NOSONAR
             body: bytes = resp.read()
             return body.decode("utf-8", errors="replace")
-    except (urllib.error.URLError, socket.timeout, OSError):
+    except OSError:
         return None
 
 
@@ -109,8 +107,8 @@ def _compute_dashcam_info(
     if not address:
         return {_KEY_AVAILABLE: False, "reason": "no address configured"}
 
-    # blackvue firmware is http-only; NOSONAR suppresses python:S5332 on the
-    # two url literals below.
+    # blackvue firmware is http-only (no https); the trailing markers on the
+    # two url literals below silence the clear-text-http check.
     version_url = f"http://{address}/Config/version.bin"  # NOSONAR
     config_url = f"http://{address}/Config/config.ini"  # NOSONAR
     firmware_raw = _fetch_text(version_url, timeout)
