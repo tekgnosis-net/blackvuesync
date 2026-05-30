@@ -432,6 +432,41 @@ When no address is configured:
 
 ---
 
+## Dashcam API Endpoints
+
+### `GET /api/dashcam/info`
+
+Read-only inspection of the dashcam's on-camera configuration. Fetches
+`http://<address>/Config/version.bin` and `http://<address>/Config/config.ini`
+(BlackVue firmware is HTTP-only), parses them defensively, and returns
+structured JSON. Changing settings is deliberately out of scope (a future
+sub-project); this endpoint never writes to the camera.
+
+Available (firmware may be null if version.bin was unreachable while
+config.ini succeeded -- partial availability still reports available: true):
+
+```json
+{
+  "available": true,
+  "address": "192.168.1.50",
+  "firmware": "DR900X-2.013",
+  "config": {"Tab1": {"Resolution": "4K"}, "Tab3": {"Voice": "ON"}},
+  "setting_count": 2
+}
+```
+
+Unreachable or no address configured:
+
+```json
+{"available": false, "reason": "dashcam unreachable"}
+```
+
+```json
+{"available": false, "reason": "no address configured"}
+```
+
+---
+
 ## Recordings API Endpoints
 
 ### `GET /api/recordings/recent`
@@ -521,3 +556,6 @@ embeds it. No client currently mounts these fragments.
 - `GET /hx/recent-activity-card` -- renders
   `_partials/recent_activity_card.html` with the same data as
   `/api/recordings/recent` (default `limit=5`)
+- `GET /hx/dashcam-info-card` -- renders `_partials/dashcam_info_card.html`.
+  Loads once on page load and refreshes every 60s (config is near-static and
+  the fetch is two files, so it polls slower than the 5s cards).
