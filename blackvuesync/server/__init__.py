@@ -66,6 +66,7 @@ def create_app(  # pylint: disable=too-many-locals
 
     # pylint: disable=import-outside-toplevel
     from blackvuesync.server.routes.api_auth import api_auth_bp
+    from blackvuesync.server.routes.api_dashcam import api_dashcam_bp
     from blackvuesync.server.routes.api_health import api_health_bp
     from blackvuesync.server.routes.api_recordings import api_recordings_bp
     from blackvuesync.server.routes.api_schedule import api_schedule_bp
@@ -83,6 +84,7 @@ def create_app(  # pylint: disable=too-many-locals
     app.register_blueprint(ui_bp)
     app.register_blueprint(health_bp)
     app.register_blueprint(api_auth_bp)
+    app.register_blueprint(api_dashcam_bp)
     app.register_blueprint(api_health_bp)
     app.register_blueprint(api_recordings_bp)
     app.register_blueprint(api_schedule_bp)
