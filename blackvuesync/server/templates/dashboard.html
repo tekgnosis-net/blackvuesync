@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard -- BlackVue Sync{% endblock %}
+
+{% block extra_css %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/dashboard.css') }}">
+{% endblock %}
+
+{% block footer_version %}{{ version }}{% endblock %}
+
+{% block content %}
+<div class="dashboard">
+  <aside class="dashboard-sidebar">
+    <div class="sidebar-section sidebar-identity">
+      <span class="sidebar-label">Signed in</span>
+      <span class="identity-name">{{ g.current_user }}</span>
+      <span class="identity-mode">{{ auth_mode }} mode</span>
+    </div>
+    <div class="sidebar-section">
+      <span class="sidebar-label">Quick actions</span>
+      <div class="sidebar-actions">
+        <button type="button" class="button button-secondary button-full" disabled>Sync now</button>
+        <button type="button" class="button button-secondary button-full" disabled>Pause schedule</button>
+      </div>
+      <span class="sidebar-hint">Live controls arrive in the next update.</span>
+    </div>
+  </aside>
+
+  <div class="dashboard-grid">
+    {# local cards: pre-rendered populated in the route (each with its own
+       isolated context, so the shared `available` key cannot collide across
+       cards), injected here as already-escaped html. they then self-poll. #}
+    {{ last_run_html | safe }}
+    {{ next_scheduled_html | safe }}
+    {{ storage_html | safe }}
+    {{ recent_activity_html | safe }}
+    {# network cards: shells; htmx loads them after the page paints #}
+    {% include "_partials/dashcam_card.html" %}
+    {% include "_partials/dashcam_info_card.html" %}
+  </div>
+</div>
+{% endblock %}

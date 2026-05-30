@@ -1,15 +1,18 @@
-{# dashcam card fragment. polled every 5s by HTMX. #}
+{# dashcam reachability card. loads on page load, then polls every 5s. when
+   rendered as a server-side shell (no context), shows a 'checking' state. #}
 <div class="card"
      id="dashcam-card"
      hx-get="/hx/dashcam-card"
-     hx-trigger="every 5s"
+     hx-trigger="load, every 5s"
      hx-swap="outerHTML">
   <div class="card-label">Dashcam</div>
-  {% if reachable %}
+  {% if reachable is defined and reachable %}
     <div class="card-value"><span class="dot green"></span>reachable</div>
     <div class="card-sub">{{ address }} · {{ latency_ms }} ms</div>
-  {% else %}
+  {% elif reachable is defined %}
     <div class="card-value"><span class="dot red"></span>unreachable</div>
     <div class="card-sub">{{ address or "no address configured" }} · {{ reason }}</div>
+  {% else %}
+    <div class="card-value">checking…</div>
   {% endif %}
 </div>

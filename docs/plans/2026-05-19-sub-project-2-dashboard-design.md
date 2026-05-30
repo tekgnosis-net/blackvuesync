@@ -17,8 +17,8 @@ Sub-project #2 replaces the placeholder at `/` with the operational dashboard th
 
 The dashboard has **two visual states**, driven by `SyncProgress.state` from the foundation's ProgressPublisher:
 
-- **idle / complete / failed** -- status overview: 5 cards in a grid, polled every 5 s
-- **running** -- live console: hero progress card driven by Server-Sent Events, four supporting cards remain
+- **idle / complete / failed** -- status overview: 6 cards in a grid, polled every 5 s
+- **running** -- live console: hero progress card driven by Server-Sent Events, five supporting cards remain
 
 The transition between states is driven by a single source of truth (`<body data-state="...">`) and is fully reversible -- when a sync completes, the hero fades and the idle grid returns.
 
@@ -75,7 +75,7 @@ The sidebar collapses to a top action row below 720 px viewport width (single `@
 ```
                   ┌────────────────────────────────────┐
    page load ────▶│  body[data-state="idle"]           │◀──┐
-                  │  · 5 cards visible, HTMX polling   │   │
+                  │  · 6 cards visible, HTMX polling   │   │
                   └──┬─────────────────────────────────┘   │
                      │ Sync now / cron tick                │
                      │ state → running                     │
@@ -104,7 +104,7 @@ The transition timing is driven entirely by the existing ProgressPublisher's `PO
 | Phase | Scope | Approximate size |
 |---|---|---|
 | **2A** Backend | 6 new endpoints + 4 new HTMX fragments + sync.py stop flag + scheduler pause hook + new settings field | ~500 LoC + ~30 tests |
-| **2B** Idle UI | `dashboard.html` template replaces placeholder, sidebar layout, 5 cards rendered, HTMX polling wired | ~400 LoC + ~10 tests |
+| **2B** Idle UI + dashcam info | `dashboard.html` template replaces placeholder, sidebar layout, 6 cards rendered, HTMX polling wired. Adds `GET /api/dashcam/info` + `/hx/dashcam-info-card` for the new dashcam info card (read-only inspection of `/Config/version.bin` and `/Config/config.ini`). | ~500 LoC + ~15 tests |
 | **2C** Active mode + controls | SSE EventSource wiring, mode transitions, Sync now/Stop/Pause sidebar wiring, exponential backoff | ~400 LoC + ~16 tests |
 
 Each phase ships as its own PR through the same branch-protection cadence the foundation used (5 required CI checks; spec-compliance review then code-quality review).
@@ -136,7 +136,7 @@ Each phase ships as its own PR through the same branch-protection cadence the fo
 
 | New file | Phase | Responsibility |
 |---|---|---|
-| `blackvuesync/server/templates/dashboard.html` | 2B | Replaces the placeholder. Sidebar layout, card grid, Alpine.js `x-data` for state tracking. Server-renders all 5 cards on first load. |
+| `blackvuesync/server/templates/dashboard.html` | 2B | Replaces the placeholder. Sidebar layout, card grid, Alpine.js `x-data` for state tracking. Server-renders all 6 cards on first load. |
 | `blackvuesync/server/static/css/dashboard.css` | 2B | Sidebar grid, responsive collapse (<720 px → top bar), hero gradient (`linear-gradient(135deg, var(--accent) 0%, var(--accent-2) 100%)`), mode-based show/hide via `body[data-state="..."]` |
 | `blackvuesync/server/static/js/dashboard.js` | 2C | Alpine.js component: subscribes to `/api/sync/progress/stream` when state becomes `running`, closes EventSource when terminal. Updates `body[data-state]` attribute. Exponential backoff 2 s → 30 s on stream break. Handles 302 → `/login` redirect uniformly across HTMX, SSE, and API responses. |
 
@@ -162,7 +162,7 @@ Each phase ships as its own PR through the same branch-protection cadence the fo
 
 ## Design Section 3: Data flow
 
-### Idle-mode polling (5 cards, every 5 seconds)
+### Idle-mode polling (6 cards, every 5 seconds)
 
 ```
 Browser
@@ -243,7 +243,7 @@ A single source of truth: `SyncProgress.state` from either the idle poll (`/hx/s
 
 | Constraint | Behavior |
 |---|---|
-| JavaScript disabled | First-load page is fully server-rendered (all 5 cards present). Idle polling stops; active-mode shows static "JavaScript required for live progress" message |
+| JavaScript disabled | First-load page is fully server-rendered (all 6 cards present). Idle polling stops; active-mode shows static "JavaScript required for live progress" message |
 | Idle poll and SSE disagree on `state` | `last_event_monotonic` is monotonic -- Alpine.js compares timestamps, only applies newer snapshot |
 
 ---
@@ -261,7 +261,7 @@ A single source of truth: `SyncProgress.state` from either the idle poll (`/hx/s
 | 2A | `test/test_routes_api_sync_stop.py` (or extend existing) | 202 when running, 404 when idle, `_stop_event` set after call |
 | 2A | `test/test_sync_stop_flag.py` | `request_stop`/`clear_stop` semantics; mocked chunk loop raises `UserWarning("stopped by user")` when flag set; `trigger_sync` clears on start |
 | 2A | `test/test_scheduler_pause.py` | `_scheduled_run` skips when paused; resume → next tick runs; manual `trigger_sync` unaffected by pause |
-| 2B | `test/test_dashboard_render.py` | template replaces placeholder; sidebar + 5 cards present; CSP-compliant inline script (or external); initial `data-state="idle"` |
+| 2B | `test/test_dashboard_render.py` | template replaces placeholder; sidebar + 6 cards present; CSP-compliant inline script (or external); initial `data-state="idle"` |
 | 2C | `test/test_dashboard_sse_handoff.py` | state transitions tracked via `body[data-state]`; SSE opens on running, closes on terminal |
 | 2C | `test/test_sync_now_stop_pause_buttons.py` | sidebar actions wire to correct POST endpoints + CSRF tokens |
 
@@ -271,7 +271,7 @@ A single source of truth: `SyncProgress.state` from either the idle poll (`/hx/s
 
 New feature file `features/dashboard.feature`:
 
-- Scenario: idle dashboard renders all five status cards
+- Scenario: idle dashboard renders all six status cards
 - Scenario: sync now button kicks off a sync and the hero appears
 - Scenario: stop button cleanly terminates a running sync; partial `.filename.mp4` dotfile survives
 - Scenario: pause schedule survives a container restart (persistence)
@@ -303,7 +303,7 @@ All scenarios run in both `subprocess` and `docker` modes. No harness extension 
 
 **Phase 2B** (UI + idle wiring):
 - `docker run` → browser at `/` shows the dashboard, not the placeholder
-- All 5 cards populate within 5 s
+- All 6 cards populate within 5 s
 - Network tab shows independent fetches per card every 5 s
 - Dark-mode OS toggle → page flips palette without reload
 
@@ -327,11 +327,11 @@ All scenarios run in both `subprocess` and `docker` modes. No harness extension 
 ### IN sub-project #2
 
 - Dashboard at `/` with stateful idle/active modes
-- 5 idle cards (Last sync, Next scheduled, Storage, Dashcam, Recent activity)
+- 6 idle cards (Last sync, Next scheduled, Storage, Dashcam reachability, Recent activity, Dashcam info)
 - 1 active-mode hero card (live progress)
 - Sidebar with Sync now / Pause schedule / Stop sync
 - 6 new backend endpoints: `/api/health/storage`, `/api/health/dashcam`, `/api/recordings/recent`, `/api/schedule/pause`, `/api/schedule/resume`, `/api/sync/stop`
-- 4 new HTMX fragment endpoints
+- 5 new HTMX fragment endpoints (4 in 2A + 1 in 2B for dashcam info)
 - 4 new Jinja2 partials
 - `sync.py` cooperative stop flag
 - `scheduler.py` pause skip hook
@@ -442,7 +442,7 @@ Each phase has its own PR with the same five required CI checks as the foundatio
 After Phase 2C merges to main:
 
 - `docker run` produces a running container; browser at `/` shows the dashboard (not a placeholder)
-- Within 5 s of page load, all 5 cards populate with real data
+- Within 5 s of page load, all 6 cards populate with real data
 - `Sync now` button click → hero appears with live byte counter, stats update at 5 Hz
 - `Stop` button click → sync terminates cleanly, partial dotfile survives, idle grid returns
 - `Pause schedule` → next cron tick logs "scheduled sync skipped"; `Resume schedule` → next tick fires normally
@@ -463,9 +463,45 @@ After Phase 2C merges to main:
 
 ## Spec self-review
 
-Self-review pass: no TBDs or placeholders remain. The "open questions deferred to specific phases" table makes punted decisions explicit and assigns them. Each section is internally consistent: the 5 idle cards in Section 1 match the 4 new HTMX fragments + 1 reused (`last_run_card.html`) in Section 2; the active-mode hero in Section 1 reuses `sync_status_card.html` from Phase D as called out in Section 2. Coverage targets in Section 5 line up with the file inventory in Section 2. Scope guards in Section 6 do not contradict any in/out claim made elsewhere.
+Self-review pass: no TBDs or placeholders remain. The "open questions deferred to specific phases" table makes punted decisions explicit and assigns them. Each section is internally consistent: the 6 idle cards in Section 1 match the 5 new HTMX fragments + 1 reused (`last_run_card.html`) in Section 2; the active-mode hero in Section 1 reuses `sync_status_card.html` from Phase D as called out in Section 2. Coverage targets in Section 5 line up with the file inventory in Section 2. Scope guards in Section 6 do not contradict any in/out claim made elsewhere.
 
 One known limitation: the dashboard JS is not unit-tested. Coverage relies on BDD + manual verification, same as the foundation's Phase G placeholder pages. Acceptable given the JS surface is ~60-80 LoC of state-machine plus event handlers; integration tests catch the user-visible behavior end-to-end.
+
+---
+
+## Amendment 2026-05-20: Dashcam info card
+
+After Phase 2A merged, a research investigation of the BlackVue DR900 HTTP
+API revealed that the dashcam exposes `GET /Config/version.bin` (firmware
+identification) and `GET /Config/config.ini` (a parseable settings blob)
+with no authentication. Read-only inspection is trivially safe and adds
+real operational value (operators can see audio on/off, parking thresholds,
+time zone, etc.) without any write risk.
+
+Phase 2B's scope is extended to include a 6th idle card, **Dashcam info**,
+plus its backing endpoint and HTMX fragment:
+
+- `GET /api/dashcam/info` -- fetches `/Config/version.bin` + `/Config/config.ini`
+  from the dashcam, parses, returns structured JSON
+- `GET /hx/dashcam-info-card` -- renders the card fragment
+- `templates/_partials/dashcam_info_card.html` -- Jinja2 partial
+
+The new card sits alongside the other 5 in the dashboard layout (Phase 2B
+finalises the 6-card arrangement -- options include a 3x2 grid or a 2x3
+grid; the existing layout C spec stays valid in either form).
+
+**Tier 2+ writes (changing dashcam settings via `POST /upload.cgi`) are
+deferred to a future sub-project #7.** Research findings: `POST /upload.cgi`
+is dual-purpose (settings AND firmware uploads) with no content-type
+gating, the config schema is undocumented and version-fragile across
+DR900X / DR900S firmware lines, and no open-source library implements
+writes despite many reading. The risk profile justifies a separate scoping
+conversation, after sub-project #2 ships, gated on a controlled experiment
+with the user's actual hardware.
+
+Key research citations: `Digital-Nebula/hackvue`,
+`DavidMetcalfe/BlackVue-DR900S-config`, `DoctorMcKay/node-blackvue`,
+manuals at `manual.blackvue.com`.
 
 ---
 

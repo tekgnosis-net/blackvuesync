@@ -1,0 +1,29 @@
+{# dashcam-info card fragment. loads once on page load, refreshes every 60s
+   (config is near-static and the fetch is two files, so it polls slower than
+   the 5s cards). when rendered as a server-side shell, `available` is
+   undefined and the card shows a loading state. #}
+<div class="card"
+     id="dashcam-info-card"
+     hx-get="/hx/dashcam-info-card"
+     hx-trigger="load, every 60s"
+     hx-swap="outerHTML">
+  <div class="card-label">Dashcam info</div>
+  {% if available is defined and available %}
+    <div class="card-value">{{ firmware or "connected" }}</div>
+    {% if entries %}
+      <div class="card-sub">{{ setting_count }} settings</div>
+      <dl class="dashcam-config">
+        {% for label, value in entries %}
+          <div class="row"><dt class="file">{{ label }}</dt><dd>{{ value }}</dd></div>
+        {% endfor %}
+      </dl>
+    {% else %}
+      <div class="card-sub">no readable config</div>
+    {% endif %}
+  {% elif available is defined %}
+    <div class="card-value">--</div>
+    <div class="card-sub">{{ reason }}</div>
+  {% else %}
+    <div class="card-value">checking…</div>
+  {% endif %}
+</div>
