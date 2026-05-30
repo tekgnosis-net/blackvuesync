@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 import pytest
 
+from blackvuesync import __version__
 from blackvuesync.server import create_app
 from blackvuesync.server.auth import hash_password
 from blackvuesync.settings import SettingsStore
@@ -59,6 +60,8 @@ class TestDashboardRender:
         assert b"coming in sub-project" not in resp.data
         assert b"dashboard-grid" in resp.data
         assert b"dashboard-sidebar" in resp.data
+        # footer renders the version, matching every other page
+        assert __version__.encode() in resp.data
 
     def test_includes_all_six_card_ids(self, logged_in_client: Any) -> None:
         client, _, _ = logged_in_client
