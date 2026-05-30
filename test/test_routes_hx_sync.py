@@ -127,6 +127,13 @@ class TestLastRunCard:
         resp = client.get("/hx/sync/last-run-card")
         assert resp.status_code == 200
         assert b"last-run-card" in resp.data
+        assert b"card-label" in resp.data
+
+    def test_self_polls_via_hx_trigger(self, logged_in_client: Any) -> None:
+        client, _ = logged_in_client
+        resp = client.get("/hx/sync/last-run-card")
+        assert resp.status_code == 200
+        assert b"hx-trigger" in resp.data
 
     def test_shows_no_completed_sync_message_initially(
         self, logged_in_client: Any
@@ -134,7 +141,7 @@ class TestLastRunCard:
         client, _ = logged_in_client
         resp = client.get("/hx/sync/last-run-card")
         assert resp.status_code == 200
-        assert b"no completed sync" in resp.data
+        assert b"no completed sync recorded" in resp.data
 
     def test_shows_complete_state_after_sync(self, logged_in_client: Any) -> None:
         client, pub = logged_in_client
@@ -143,6 +150,7 @@ class TestLastRunCard:
         resp = client.get("/hx/sync/last-run-card")
         assert resp.status_code == 200
         assert b"complete" in resp.data
+        assert b"badge-" in resp.data
 
     def test_redirects_to_login_when_not_authenticated(
         self, settings_path: Path

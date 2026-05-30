@@ -1,25 +1,22 @@
-<div class="card last-run-card" id="last-run-card">
-  <div class="card-header">
-    <h3 class="card-title">Last Sync Run</h3>
-  </div>
-  <div class="card-body">
-    {% if snap.state == "idle" %}
-      <p class="last-run-none">no completed sync recorded</p>
-    {% else %}
-      <dl class="last-run-details">
-        <dt>status</dt>
-        <dd>
-          <span class="badge badge-{{ snap.state }}">{{ snap.state }}</span>
-        </dd>
-        <dt>files downloaded</dt>
-        <dd>{{ snap.files_completed }}</dd>
-        {% if snap.files_failed > 0 %}
-          <dt>files failed</dt>
-          <dd>{{ snap.files_failed }}</dd>
-        {% endif %}
-        <dt>total downloaded</dt>
-        <dd>{{ snap.bytes_downloaded_total | filesizeformat }}</dd>
-      </dl>
-    {% endif %}
-  </div>
+{# last-sync card fragment. self-polls every 5s against the same route that
+   renders it, matching the other dashboard cards' idiom. #}
+<div class="card"
+     id="last-run-card"
+     hx-get="/hx/sync/last-run-card"
+     hx-trigger="every 5s"
+     hx-swap="outerHTML">
+  <div class="card-label">Last sync</div>
+  {% if snap.state == "idle" %}
+    <div class="card-value">--</div>
+    <div class="card-sub">no completed sync recorded</div>
+  {% else %}
+    <div class="card-value">
+      <span class="badge badge-{{ snap.state }}">{{ snap.state }}</span>
+    </div>
+    <div class="card-sub">
+      {{ snap.files_completed }} files ·
+      {{ snap.bytes_downloaded_total | filesizeformat }}
+      {% if snap.files_failed > 0 %} · {{ snap.files_failed }} failed{% endif %}
+    </div>
+  {% endif %}
 </div>
