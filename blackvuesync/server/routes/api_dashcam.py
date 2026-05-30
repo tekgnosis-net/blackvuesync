@@ -29,6 +29,9 @@ _FETCH_TIMEOUT = 2.0
 # how many flattened config entries the card preview surfaces.
 _PREVIEW_LIMIT = 8
 
+# dict key reused across the structural-availability return shapes.
+_KEY_AVAILABLE = "available"
+
 
 def _fetch_text(url: str, timeout: float) -> str | None:
     """GETs url and returns its decoded body, or None on any failure.
@@ -104,20 +107,21 @@ def _compute_dashcam_info(
     firmware string and config dict (either may be partial).
     """
     if not address:
-        return {"available": False, "reason": "no address configured"}
+        return {_KEY_AVAILABLE: False, "reason": "no address configured"}
 
-    # NOSONAR suppresses python:S5332 (http-only firmware).
-    firmware_raw = _fetch_text(
-        f"http://{address}/Config/version.bin", timeout
-    )  # NOSONAR
-    config_raw = _fetch_text(f"http://{address}/Config/config.ini", timeout)  # NOSONAR
+    # blackvue firmware is http-only; NOSONAR suppresses python:S5332 on the
+    # two url literals below.
+    version_url = f"http://{address}/Config/version.bin"  # NOSONAR
+    config_url = f"http://{address}/Config/config.ini"  # NOSONAR
+    firmware_raw = _fetch_text(version_url, timeout)
+    config_raw = _fetch_text(config_url, timeout)
 
     if firmware_raw is None and config_raw is None:
-        return {"available": False, "reason": "dashcam unreachable"}
+        return {_KEY_AVAILABLE: False, "reason": "dashcam unreachable"}
 
     config = _parse_config_ini(config_raw) if config_raw else {}
     return {
-        "available": True,
+        _KEY_AVAILABLE: True,
         "address": address,
         "firmware": _parse_version_bin(firmware_raw) if firmware_raw else None,
         "config": config,
