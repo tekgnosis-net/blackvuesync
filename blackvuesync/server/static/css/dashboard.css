@@ -1,0 +1,180 @@
+/* dashboard layout: sidebar + responsive card grid, plus card sub-elements.
+   all colors come from tokens.css, so light/dark mode is automatic. */
+
+/* ---------------------------------------------------------------------------
+   layout: sidebar + grid
+   --------------------------------------------------------------------------- */
+
+.dashboard {
+  display: grid;
+  grid-template-columns: 220px 1fr;
+  gap: var(--space-6);
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: var(--space-8) var(--space-4);
+}
+
+.dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--space-4);
+  align-content: start;
+}
+
+@media (max-width: 720px) {
+  .dashboard {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   sidebar
+   --------------------------------------------------------------------------- */
+
+.dashboard-sidebar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.sidebar-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.sidebar-label {
+  font-size: var(--text-caption1);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-label-secondary);
+}
+
+.sidebar-identity .identity-name {
+  font-size: var(--text-subheadline);
+  font-weight: 600;
+  color: var(--color-label);
+}
+
+.sidebar-identity .identity-mode {
+  font-size: var(--text-footnote);
+  color: var(--color-label-secondary);
+}
+
+/* quick-action buttons are disabled placeholders in phase 2b; phase 2c wires
+   them. the disabled style signals "coming soon" honestly. */
+.sidebar-actions {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.sidebar-hint {
+  font-size: var(--text-caption1);
+  color: var(--color-label-tertiary);
+}
+
+/* ---------------------------------------------------------------------------
+   card sub-elements (referenced by the card partials; styled here)
+   --------------------------------------------------------------------------- */
+
+.card-label {
+  font-size: var(--text-caption1);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-label-secondary);
+}
+
+.card-value {
+  font-size: var(--text-title3);
+  font-weight: 600;
+  color: var(--color-label);
+  margin-top: var(--space-1);
+}
+
+.card-sub {
+  font-size: var(--text-footnote);
+  color: var(--color-label-secondary);
+  margin-top: var(--space-1);
+}
+
+/* storage usage bar */
+.storage-bar {
+  height: 6px;
+  border-radius: var(--radius-sm);
+  background-color: var(--color-fill);
+  margin-top: var(--space-3);
+  overflow: hidden;
+}
+
+.storage-bar > div {
+  height: 100%;
+  background-color: var(--color-accent);
+}
+
+/* reachability dot */
+.dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: var(--space-2);
+  vertical-align: middle;
+}
+
+.dot.green {
+  background-color: var(--color-success);
+}
+
+.dot.red {
+  background-color: var(--color-error);
+}
+
+/* recent-activity + dashcam-config stacked rows */
+.card-stack,
+.dashcam-config {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-3);
+}
+
+.card-stack .row,
+.dashcam-config .row {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  font-size: var(--text-footnote);
+  color: var(--color-label-secondary);
+}
+
+.file {
+  font-family: var(--font-family-mono);
+  font-size: var(--text-caption1);
+}
+
+/* status badge on the last-sync card */
+.badge {
+  display: inline-block;
+  padding: 2px var(--space-2);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-caption1);
+  font-weight: 600;
+}
+
+.badge-complete {
+  background-color: color-mix(in srgb, var(--color-success) 18%, transparent);
+  color: var(--color-success);
+}
+
+.badge-failed {
+  background-color: color-mix(in srgb, var(--color-error) 16%, transparent);
+  color: var(--color-error);
+}
+
+.badge-running {
+  background-color: color-mix(in srgb, var(--color-accent) 16%, transparent);
+  color: var(--color-accent);
+}
