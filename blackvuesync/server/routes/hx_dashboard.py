@@ -7,6 +7,10 @@ from pathlib import Path
 from flask import Blueprint, Response, current_app, render_template
 
 from blackvuesync.server.auth import login_required
+from blackvuesync.server.routes.api_dashcam import (
+    _compute_dashcam_info,
+    _config_preview,
+)
 from blackvuesync.server.routes.api_health import _compute_dashcam, _compute_storage
 from blackvuesync.server.routes.api_recordings import _DEFAULT_LIMIT, _compute_recent
 from blackvuesync.settings import SettingsStore
@@ -101,6 +105,26 @@ def recent_activity_card() -> Response:
     ctx = _compute_recent(destination, _DEFAULT_LIMIT)
     return Response(
         render_template("_partials/recent_activity_card.html", **ctx),
+        mimetype=_MIME_HTML,
+    )
+
+
+@hx_dashboard_bp.route("/dashcam-info-card", methods=["GET"])
+@login_required
+def dashcam_info_card() -> Response:
+    """renders the dashcam-info card fragment (firmware + config preview)."""
+    store: SettingsStore = current_app.settings_store  # type: ignore[attr-defined]
+    address = store.get().connection.address
+    ctx = _compute_dashcam_info(address)
+    # ctx["config"] is typed object on the dict[str, object] return; it is a
+    # config dict only when available, which the short-circuit guarantees.
+    entries = (
+        _config_preview(ctx["config"])  # type: ignore[arg-type]
+        if ctx.get("available")
+        else []
+    )
+    return Response(
+        render_template("_partials/dashcam_info_card.html", entries=entries, **ctx),
         mimetype=_MIME_HTML,
     )
 

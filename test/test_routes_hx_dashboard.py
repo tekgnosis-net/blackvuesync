@@ -117,3 +117,50 @@ class TestRecentActivityCard:
         assert resp.status_code == 200
         assert b"recent-activity-card" in resp.data
         assert b"20231015_120000_NF.mp4" in resp.data
+
+
+class TestDashcamInfoCard:
+    """tests for GET /hx/dashcam-info-card."""
+
+    def test_renders_available(self, logged_in_client: Any) -> None:
+        from io import BytesIO
+
+        client, _, _ = logged_in_client
+
+        class _Ctx:
+            def __enter__(self):  # type: ignore[no-untyped-def]
+                return BytesIO(b"[Tab1]\nResolution=4K\n")
+
+            def __exit__(self, *a):  # type: ignore[no-untyped-def]
+                return None
+
+        def _fake_urlopen(req, timeout=0):  # type: ignore[no-untyped-def]  # noqa: ARG001
+            url = req.full_url if hasattr(req, "full_url") else req
+            if url.endswith("version.bin"):
+
+                class _V:
+                    def __enter__(self_inner):  # type: ignore[no-untyped-def]  # noqa: N805
+                        return BytesIO(b"DR900X-2.013")
+
+                    def __exit__(self_inner, *a):  # type: ignore[no-untyped-def]  # noqa: N805
+                        return None
+
+                return _V()
+            return _Ctx()
+
+        with patch("urllib.request.urlopen", side_effect=_fake_urlopen):
+            resp = client.get("/hx/dashcam-info-card")
+        assert resp.status_code == 200
+        assert "text/html" in resp.content_type
+        assert b"dashcam-info-card" in resp.data
+        assert b"DR900X-2.013" in resp.data
+        assert b"Tab1.Resolution" in resp.data
+
+    def test_renders_unavailable(self, logged_in_client: Any) -> None:
+        import socket
+
+        client, _, _ = logged_in_client
+        with patch("urllib.request.urlopen", side_effect=socket.timeout("timed out")):
+            resp = client.get("/hx/dashcam-info-card")
+        assert resp.status_code == 200
+        assert b"dashcam-info-card" in resp.data
