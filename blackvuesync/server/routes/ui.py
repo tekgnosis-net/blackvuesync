@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
-from flask import Blueprint, render_template
+from pathlib import Path
+
+from flask import Blueprint, current_app, render_template
 
 from blackvuesync import __version__
 from blackvuesync.server.auth import login_required
+from blackvuesync.server.routes.api_health import _compute_storage
+from blackvuesync.server.routes.api_recordings import _DEFAULT_LIMIT, _compute_recent
+from blackvuesync.server.routes.hx_dashboard import _next_human
 
 bp = Blueprint("ui_bp", __name__)
 
@@ -13,11 +18,49 @@ bp = Blueprint("ui_bp", __name__)
 @bp.route("/", methods=["GET"])
 @login_required
 def dashboard() -> str:
-    """renders the dashboard placeholder page."""
+    """renders the real dashboard.
+
+    the four local cards (last sync, next scheduled, storage, recent activity)
+    are pre-rendered populated -- each via its own render_template call so the
+    shared `available` key cannot collide across cards -- and injected into the
+    page with | safe. the page is therefore useful without javascript and
+    paints instantly. the two network cards (dashcam reachability, dashcam
+    info) are included as shells and fetched by htmx after load, so a slow or
+    offline dashcam never blocks the page render.
+    """
+    store = current_app.settings_store  # type: ignore[attr-defined]
+    current = store.get()
+    destination = Path(current.system.destination)
+    publisher = current_app.progress_publisher  # type: ignore[attr-defined]
+    schedule = current.schedule
+
+    last_run_html = render_template(
+        "_partials/last_run_card.html", snap=publisher.snapshot()
+    )
+    next_scheduled_html = render_template(
+        "_partials/next_scheduled_card.html",
+        paused=schedule.paused,
+        cron_expression=schedule.cron_expression,
+        timezone=schedule.timezone,
+        next_human=_next_human(schedule.cron_expression, schedule.timezone),
+    )
+    storage_html = render_template(
+        "_partials/storage_card.html", **_compute_storage(destination)
+    )
+    recent_activity_html = render_template(
+        "_partials/recent_activity_card.html",
+        **_compute_recent(destination, _DEFAULT_LIMIT),
+    )
+
     return render_template(
-        "_placeholders/dashboard.html",
+        "dashboard.html",
         version=__version__,
         page="dashboard",
+        auth_mode=current.auth.mode,
+        last_run_html=last_run_html,
+        next_scheduled_html=next_scheduled_html,
+        storage_html=storage_html,
+        recent_activity_html=recent_activity_html,
     )
 
 

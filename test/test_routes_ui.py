@@ -133,15 +133,14 @@ def test_ui_routes_accessible_without_login_in_none_mode(
 # ---------------------------------------------------------------------------
 
 
-def test_dashboard_contains_version(logged_in_client: FlaskClient) -> None:
-    """verifies the dashboard placeholder page includes the package version."""
-    from blackvuesync import __version__
-
+def test_dashboard_renders_real_grid(logged_in_client: FlaskClient) -> None:
+    """verifies the dashboard renders the real card grid, not the placeholder."""
     r = logged_in_client.get("/")
-    assert __version__.encode() in r.data
+    assert b"dashboard-grid" in r.data
 
 
-def test_dashboard_mentions_subproject(logged_in_client: FlaskClient) -> None:
-    """verifies the dashboard placeholder mentions sub-project #2."""
+def test_dashboard_not_placeholder(logged_in_client: FlaskClient) -> None:
+    """verifies the dashboard no longer shows the sub-project #2 placeholder."""
     r = logged_in_client.get("/")
-    assert b"sub-project" in r.data.lower() or b"coming" in r.data.lower()
+    assert b"sub-project" not in r.data.lower()
+    assert b"coming" not in r.data.lower()
