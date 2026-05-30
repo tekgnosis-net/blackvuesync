@@ -85,6 +85,29 @@ class TestDashcamCard:
         assert "text/html" in resp.content_type
         assert b"dashcam-card" in resp.data
 
+    def test_partial_renders_checking_shell_without_context(self) -> None:
+        """rendered with no context (the SSR shell case), the card shows a
+        'checking' state rather than a misleading 'unreachable'."""
+        import os
+        import tempfile
+        from pathlib import Path
+        from unittest.mock import patch
+
+        from flask import render_template
+
+        from blackvuesync.server import create_app
+        from blackvuesync.settings import SettingsStore
+
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d) / "settings.json"
+            with patch.dict(os.environ, {"ADDRESS": "192.168.0.1"}, clear=False):
+                store = SettingsStore(path)
+            app = create_app(store, testing=True)
+            with app.app_context():
+                html = render_template("_partials/dashcam_card.html")
+        assert "checking" in html.lower()
+        assert "dashcam-card" in html
+
 
 class TestNextScheduledCard:
     """tests for GET /hx/next-scheduled-card."""
