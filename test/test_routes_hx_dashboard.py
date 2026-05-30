@@ -164,3 +164,4 @@ class TestDashcamInfoCard:
             resp = client.get("/hx/dashcam-info-card")
         assert resp.status_code == 200
         assert b"dashcam-info-card" in resp.data
+        assert b"dashcam unreachable" in resp.data
