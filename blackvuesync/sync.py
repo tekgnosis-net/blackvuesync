@@ -1113,6 +1113,15 @@ def sync(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
     # sorts the dashcam recordings so we download them according to some priority
     sort_recordings(current_dashcam_recordings, download_priority)
 
+    # prunes partials for recordings no longer downloadable this run; preserves
+    # partials for recordings that are still current so they can be resumed.
+    expected_filenames = {
+        build_filename(r)
+        for r in current_dashcam_recordings
+        for (_artifact_type, _skip_key, build_filename) in _ARTIFACTS
+    }
+    prune_orphan_partials(destination, expected_filenames)
+
     if publisher is not None:
         publisher.begin_job(len(current_dashcam_recordings), job_id=job_id)
 
@@ -1137,17 +1146,6 @@ TEMP_FILENAME_GLOB = ".[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][
 
 def clean_destination(destination: str, grouping: str) -> None:
     """removes temporary artifacts from the destination directory"""
-    # removes temporary files from interrupted downloads
-    temp_filepath_glob = os.path.join(destination, TEMP_FILENAME_GLOB)
-    temp_filepaths = glob.glob(temp_filepath_glob)
-
-    for temp_filepath in temp_filepaths:
-        if not dry_run:
-            logger.debug("Removing temporary file : %s", temp_filepath)
-            os.remove(temp_filepath)
-        else:
-            logger.debug("DRY RUN Would remove temporary file : %s", temp_filepath)
-
     # removes empty grouping directories; ignores dotfiles such as .DS_Store
     group_name_glob = group_name_globs[grouping]
     if group_name_glob:
@@ -1164,6 +1162,24 @@ def clean_destination(destination: str, grouping: str) -> None:
                     logger.debug(
                         "DRY RUN Would remove grouping directory : %s", group_filepath
                     )
+
+
+def prune_orphan_partials(destination: str, expected_filenames: set[str]) -> None:
+    """removes partial dotfiles whose recording is no longer downloadable this run.
+
+    a partial is kept when its filename is in expected_filenames (it will be
+    resumed); otherwise it is an orphan (rolled off the dashcam, out of the
+    retention window, or now filtered out) and is removed."""
+    temp_glob = os.path.join(destination, TEMP_FILENAME_GLOB)
+    for temp_filepath in glob.glob(temp_glob):
+        filename = os.path.basename(temp_filepath)[1:]  # strips leading dot
+        if filename in expected_filenames:
+            continue
+        if dry_run:
+            logger.debug("DRY RUN Would remove orphan partial : %s", temp_filepath)
+            continue
+        logger.debug("Removing orphan partial : %s", temp_filepath)
+        os.remove(temp_filepath)
 
 
 def lock(destination: str) -> int:
