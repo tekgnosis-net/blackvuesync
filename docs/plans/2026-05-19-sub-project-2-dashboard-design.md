@@ -358,6 +358,14 @@ All scenarios run in both `subprocess` and `docker` modes. No harness extension 
 - `sync.py` cognitive-complexity decomposition of `download_file` and `download_recording` (S3776) -- separate cleanup PR
 - Multi-stage Dockerfile to drop the uv binary from the final image -- separate Docker optimization PR
 - `LoggingSettings.on_change` listener wiring -- sub-project #3
+- byte-range resume of interrupted downloads, paired with the `download_file` /
+  `download_recording` S3776 decomposition (one PR) -- see
+  `docs/plans/2026-06-01-download-resume-design.md`. today the dotfile pattern
+  gives atomicity (rename-on-complete), not resume: `download_file` truncates the
+  partial and sends no `Range` header, and `clean_destination` deletes every
+  partial in a `finally`. the design adds a runtime range probe (the resume
+  `GET` itself) with a `200`/`416` full-restart fallback, keeps resumable
+  partials across runs, and prunes orphaned partials at sync start.
 
 ### Open questions deferred to specific phases
 
