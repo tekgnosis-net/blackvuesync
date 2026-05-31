@@ -556,30 +556,40 @@ def _build_record_request(url: str, resume_from: int) -> urllib.request.Request:
     return request
 
 
-def _stream_response(  # pylint: disable=too-many-locals
-    response: object,
-    temp_filepath: str,
-    resume_from: int,
-    on_chunk: Callable[[int, int], None] | None,
-) -> tuple[int, int]:
-    """writes the body to the temp file, appending when the server confirms a 206
-    resume and truncating otherwise; returns (bytes_transferred, total_bytes)."""
-    status = response.getcode()  # type: ignore[attr-defined]
-    headers = response.info()  # type: ignore[attr-defined]
-    content_length = int(headers.get("Content-Length") or 0)
+def _resume_decision(status: int, headers: object, resume_from: int) -> tuple[str, int]:
+    """determines how to handle the server response for a download attempt.
 
-    resume_ok = False
-    total_bytes = content_length
+    returns (action, total_bytes) where action is one of:
+      "resume"  -- confirmed 206 resume; use "ab" and start count from resume_from.
+      "restart" -- unconfirmed 206; discard partial and retry from byte 0.
+      "fresh"   -- 200 or any non-resume case; use "wb" and start count from 0.
+    """
+    content_length = int(headers.get("Content-Length") or 0)  # type: ignore[attr-defined]
     if status == 206 and resume_from > 0:
-        m = content_range_re.fullmatch((headers.get("Content-Range") or "").strip())
+        m = content_range_re.fullmatch(
+            (headers.get("Content-Range") or "").strip()  # type: ignore[attr-defined]
+        )
         if m is not None and int(m.group("start")) == resume_from:
-            resume_ok = True
             total = m.group("total")
             total_bytes = int(total) if total != "*" else resume_from + content_length
+            return "resume", total_bytes
+        # 206 but content-range is missing, malformed, or starts at the wrong
+        # offset -- writing this partial body as a complete file would corrupt it.
+        return "restart", 0
+    return "fresh", content_length
 
-    mode = "ab" if resume_ok else "wb"
-    downloaded = resume_from if resume_ok else 0
-    start_at = downloaded
+
+def _stream_response(
+    response: object,
+    temp_filepath: str,
+    *,
+    append: bool,
+    total_bytes: int,
+    on_chunk: Callable[[int, int], None] | None,
+) -> int:
+    """writes the body to the temp file; returns bytes transferred this run."""
+    mode = "ab" if append else "wb"
+    downloaded = 0
     with open(temp_filepath, mode) as f:
         while True:
             chunk = response.read(DOWNLOAD_CHUNK_SIZE)  # type: ignore[attr-defined]
@@ -593,7 +603,7 @@ def _stream_response(  # pylint: disable=too-many-locals
             downloaded += len(chunk)
             if on_chunk is not None:
                 on_chunk(downloaded, total_bytes)
-    return downloaded - start_at, total_bytes
+    return downloaded
 
 
 def _log_download_success(
@@ -636,7 +646,7 @@ def _log_download_failure(filename: str, error: object, *, marker: bool) -> None
     )
 
 
-def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-branches,too-many-locals,too-many-return-statements
+def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-branches,too-many-locals,too-many-return-statements,too-many-statements
     base_url: str,
     filename: str,
     destination: str,
@@ -704,14 +714,35 @@ def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arg
     try:
         url = urllib.parse.urljoin(base_url, f"Record/{filename}")
         start = time.perf_counter()
+        needs_restart = False
+        transferred = 0
         try:
             request = _build_record_request(url, resume_from)
             with urllib.request.urlopen(request) as response:
-                transferred, _total = _stream_response(
-                    response, temp_filepath, resume_from, on_chunk
+                action, total_bytes = _resume_decision(
+                    response.getcode(), response.info(), resume_from
                 )
+                if action == "restart":
+                    # unconfirmed 206: partial body cannot be safely written as
+                    # a complete file; discard partial and retry from byte 0.
+                    needs_restart = True
+                else:
+                    transferred = _stream_response(
+                        response,
+                        temp_filepath,
+                        append=(action == "resume"),
+                        total_bytes=total_bytes,
+                        on_chunk=on_chunk,
+                    )
         finally:
             elapsed_s = time.perf_counter() - start
+
+        if needs_restart:
+            with contextlib.suppress(OSError):
+                os.remove(temp_filepath)
+            return download_file(
+                base_url, filename, destination, group_name, metrics, on_chunk
+            )
 
         os.rename(temp_filepath, destination_filepath)
 
@@ -725,10 +756,12 @@ def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arg
 
         return True, speed_bps
     except urllib.error.HTTPError as e:
-        if e.code == 416:
+        if e.code == 416 and resume_from > 0:
             # the local partial is larger than the source (corrupt); discards and
             # restarts once from byte 0. after removal _resume_offset returns 0,
-            # so the retry sends no Range header and cannot loop.
+            # so the retry sends no Range header and cannot loop. a 416 on a
+            # no-Range request (resume_from == 0) falls through to generic
+            # http-error handling rather than retrying.
             with contextlib.suppress(OSError):
                 os.remove(temp_filepath)
             return download_file(

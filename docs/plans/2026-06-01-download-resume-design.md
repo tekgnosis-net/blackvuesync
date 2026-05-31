@@ -107,8 +107,9 @@ open the response:
            total = parsed total from Content-Range, else resume_from + Content-Length
   status 200 (OK)                      # server ignored Range, or none sent
         -> open temp "wb" (truncate);  downloaded = 0; total = Content-Length
-  status 206 but Content-Range start != resume_from   # server disagreed
-        -> treat as full restart: open "wb"; downloaded = 0
+  status 206 but Content-Range is missing/malformed/start != resume_from
+        -> discard partial, restart once from byte 0 (same as 416) --
+           a 206 partial body cannot be safely written as a complete file
   HTTPError 416 (Range Not Satisfiable)               # partial >= source size
         -> remove the partial; retry once from byte 0 (truncate)
 

@@ -84,6 +84,34 @@ class _NoRangeHandler(BaseHTTPRequestHandler):
         """silences test server logging."""
 
 
+class _UnconfirmedPartialHandler(BaseHTTPRequestHandler):
+    """on a Range request returns 206 with a partial tail body but NO Content-Range
+    header; on a plain request returns 200 with the full payload.
+
+    simulates a server that responds 206 without confirming the resume offset,
+    which would corrupt the destination file if written with 'wb'.
+    """
+
+    def do_GET(self) -> None:  # noqa: N802
+        rng = self.headers.get("Range")
+        if rng and (m := _RANGE_RE.fullmatch(rng.strip())):
+            start = int(m.group(1))
+            body = _PAYLOAD[start:]
+            self.send_response(206)
+            self.send_header("Content-Length", str(len(body)))
+            # deliberately omits Content-Range to leave the resume unconfirmed
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        self.send_response(200)
+        self.send_header("Content-Length", str(len(_PAYLOAD)))
+        self.end_headers()
+        self.wfile.write(_PAYLOAD)
+
+    def log_message(self, fmt: str, *args: object) -> None:  # noqa: A002
+        """silences test server logging."""
+
+
 def _serve(handler: type[BaseHTTPRequestHandler]) -> Generator[str, None, None]:
     handler.seen_range = None  # type: ignore[attr-defined]
     server = HTTPServer(("127.0.0.1", 0), handler)
@@ -107,6 +135,11 @@ def norange_server() -> Generator[str, None, None]:
 @pytest.fixture()
 def mismatched_range_server() -> Generator[str, None, None]:
     yield from _serve(_MismatchedRangeHandler)
+
+
+@pytest.fixture()
+def unconfirmed_partial_server() -> Generator[str, None, None]:
+    yield from _serve(_UnconfirmedPartialHandler)
 
 
 def _seed_partial(destination: Path, nbytes: int) -> None:
@@ -192,4 +225,19 @@ class TestResume:
         assert ok is True
         assert _final(tmp_path) == _PAYLOAD
         # partial dotfile must be gone after the successful retry
+        assert not (tmp_path / f".{_FILENAME}").exists()
+
+    def test_unconfirmed_206_discards_partial_and_restarts(
+        self, unconfirmed_partial_server: str, tmp_path: Path
+    ) -> None:
+        # server returns 206 with a partial tail body but no Content-Range header;
+        # download_file must NOT write the tail as a complete file (corruption).
+        # it must discard the partial and restart from byte 0, producing the full
+        # payload via the server's 200 path.
+        _seed_partial(tmp_path, 3000)
+        ok, _ = download_file(
+            unconfirmed_partial_server, _FILENAME, str(tmp_path), None
+        )
+        assert ok is True
+        assert _final(tmp_path) == _PAYLOAD
         assert not (tmp_path / f".{_FILENAME}").exists()
