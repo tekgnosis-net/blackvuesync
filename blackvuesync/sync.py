@@ -344,6 +344,23 @@ def to_recording(filename: str, grouping: str) -> Recording | None:
     )
 
 
+# artifact table: (artifact_type, skip_metadata_key, filename_builder).
+# used by download_recording and prune_orphan_partials to enumerate all
+# expected artifact filenames for a recording.
+_ARTIFACTS: list[tuple[str, str | None, Callable[[Recording], str]]] = [
+    ("mp4", None, lambda r: r.filename),
+    ("thm", "t", lambda r: f"{r.base_filename}_{r.type}{r.direction}.thm"),
+    ("3gf", "3", lambda r: f"{r.base_filename}_{r.type}.3gf"),
+    ("gps", "g", lambda r: f"{r.base_filename}_{r.type}.gps"),
+]
+
+# maps artifact skip_metadata_key to the skip-log metadata_type and format string
+_ARTIFACT_SKIP_LABEL: dict[str, tuple[str, str]] = {
+    "t": ("thumbnail", "Skipping thumbnail : %s (--skip-metadata)"),
+    "3": ("accelerometer", "Skipping accelerometer : %s (--skip-metadata)"),
+    "g": ("gps", "Skipping gps : %s (--skip-metadata)"),
+}
+
 # pattern of a recording filename as returned in each line from the dashcam index page
 file_line_re = re.compile(r"n:/Record/(?P<filename>.*\.mp4),s:1000000\r\n")
 
@@ -738,60 +755,25 @@ def download_recording(  # pylint: disable=too-many-locals
                 publisher.finish_file(success=False, reason=type(exc).__name__)
             raise
 
-    # downloads the video recording
-    filename = recording.filename
-    downloaded, speed_bps = _dl(filename, "mp4")
-    any_downloaded |= downloaded
-
-    # downloads the thumbnail file
-    if "t" not in skip_metadata:
-        thm_filename = (
-            f"{recording.base_filename}_{recording.type}{recording.direction}.thm"
-        )
-        downloaded, _ = _dl(thm_filename, "thm")
+    speed_bps: int | None = None
+    for artifact_type, skip_key, build_filename in _ARTIFACTS:
+        if skip_key is not None and skip_key in skip_metadata:
+            metadata_type, fmt = _ARTIFACT_SKIP_LABEL[skip_key]
+            logger.debug(
+                fmt,
+                recording.base_filename,
+                extra={
+                    "event": "metadata_skipped",
+                    "metadata_type": metadata_type,
+                    "recording_base_filename": recording.base_filename,
+                },
+            )
+            continue
+        fn = build_filename(recording)
+        downloaded, artifact_speed = _dl(fn, artifact_type)
         any_downloaded |= downloaded
-    else:
-        logger.debug(
-            "Skipping thumbnail : %s (--skip-metadata)",
-            recording.base_filename,
-            extra={
-                "event": "metadata_skipped",
-                "metadata_type": "thumbnail",
-                "recording_base_filename": recording.base_filename,
-            },
-        )
-
-    # downloads the accelerometer data
-    if "3" not in skip_metadata:
-        tgf_filename = f"{recording.base_filename}_{recording.type}.3gf"
-        downloaded, _ = _dl(tgf_filename, "3gf")
-        any_downloaded |= downloaded
-    else:
-        logger.debug(
-            "Skipping accelerometer : %s (--skip-metadata)",
-            recording.base_filename,
-            extra={
-                "event": "metadata_skipped",
-                "metadata_type": "accelerometer",
-                "recording_base_filename": recording.base_filename,
-            },
-        )
-
-    # downloads the gps data
-    if "g" not in skip_metadata:
-        gps_filename = f"{recording.base_filename}_{recording.type}.gps"
-        downloaded, _ = _dl(gps_filename, "gps")
-        any_downloaded |= downloaded
-    else:
-        logger.debug(
-            "Skipping gps : %s (--skip-metadata)",
-            recording.base_filename,
-            extra={
-                "event": "metadata_skipped",
-                "metadata_type": "gps",
-                "recording_base_filename": recording.base_filename,
-            },
-        )
+        if artifact_type == "mp4":
+            speed_bps = artifact_speed
 
     # logs if any part of a recording was downloaded (or would have been)
     if any_downloaded:
