@@ -1,12 +1,19 @@
 """downloaded recording setup and verification step definitions"""
 
 import re
+from pathlib import Path
 
 from behave import given, then
 from behave.runner import Context
 from hamcrest import assert_that, empty, has_items
 
 from features.lib.recordings import create_recording_files
+
+# directory containing the mock files served by the mock dashcam
+_MOCK_FILES_DIR = Path(__file__).parent.parent / "mock_dashcam" / "files"
+
+# prefix size used for seeding partial downloads in resume tests
+_PARTIAL_PREFIX_BYTES = 32768
 
 # recording filename pattern - matches BlackVue recording filenames
 # format: YYYYMMDD_HHMMSS_TD.ext where T=type, D=direction, ext=mp4/thm/3gf/gps
@@ -85,6 +92,15 @@ def downloaded_recordings_past_no_other(
     downloaded_recordings_past(
         context, period, recording_types, recording_directions, ""
     )
+
+
+@given('a partial download of "{filename}"')
+def partial_download(context: Context, filename: str) -> None:
+    """seeds a partial dotfile in the destination with a prefix of the mock source bytes."""
+    extension = filename.rsplit(".", 1)[-1]
+    mock_bytes = (_MOCK_FILES_DIR / f"mock.{extension}").read_bytes()
+    partial_bytes = mock_bytes[:_PARTIAL_PREFIX_BYTES]
+    (context.dest_dir / f".{filename}").write_bytes(partial_bytes)
 
 
 @then("all the recordings are downloaded")
@@ -171,3 +187,15 @@ def assert_no_extension_files(context: Context, extension: str) -> None:
         empty(),
         f"Expected no .{extension} files, but found: {matching_files}",
     )
+
+
+@then('the recording "{filename}" is fully downloaded')
+def assert_recording_fully_downloaded(context: Context, filename: str) -> None:
+    """verifies a recording exists in the destination and matches the mock source bytes."""
+    dest_file = context.dest_dir / filename
+    assert dest_file.exists(), f"{filename} not found in destination"
+
+    extension = filename.rsplit(".", 1)[-1]
+    expected = (_MOCK_FILES_DIR / f"mock.{extension}").read_bytes()
+    actual = dest_file.read_bytes()
+    assert actual == expected, f"{filename}: content mismatch with mock source"

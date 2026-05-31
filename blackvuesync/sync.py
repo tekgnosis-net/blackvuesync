@@ -135,6 +135,9 @@ skip_metadata: set[str] = set()  # pylint: disable=invalid-name
 # duration regex for --keep and --retry-failed-after
 duration_re = re.compile(r"""(?P<range>\d+)(?P<unit>[shdw]?)""")
 
+# parses a Content-Range value such as "bytes 100-199/500" (total may be "*")
+content_range_re = re.compile(r"bytes\s+(?P<start>\d+)-\d+/(?P<total>\d+|\*)")
+
 # cutoff date; only recordings from this date on are downloaded and kept
 cutoff_date: datetime.date | None = None  # pylint: disable=invalid-name
 
@@ -344,6 +347,23 @@ def to_recording(filename: str, grouping: str) -> Recording | None:
     )
 
 
+# artifact table: (artifact_type, skip_metadata_key, filename_builder).
+# used by download_recording and prune_orphan_partials to enumerate all
+# expected artifact filenames for a recording.
+_ARTIFACTS: list[tuple[str, str | None, Callable[[Recording], str]]] = [
+    ("mp4", None, lambda r: r.filename),
+    ("thm", "t", lambda r: f"{r.base_filename}_{r.type}{r.direction}.thm"),
+    ("3gf", "3", lambda r: f"{r.base_filename}_{r.type}.3gf"),
+    ("gps", "g", lambda r: f"{r.base_filename}_{r.type}.gps"),
+]
+
+# maps artifact skip_metadata_key to the skip-log metadata_type and format string
+_ARTIFACT_SKIP_LABEL: dict[str, tuple[str, str]] = {
+    "t": ("thumbnail", "Skipping thumbnail : %s (--skip-metadata)"),
+    "3": ("accelerometer", "Skipping accelerometer : %s (--skip-metadata)"),
+    "g": ("gps", "Skipping gps : %s (--skip-metadata)"),
+}
+
 # pattern of a recording filename as returned in each line from the dashcam index page
 file_line_re = re.compile(r"n:/Record/(?P<filename>.*\.mp4),s:1000000\r\n")
 
@@ -518,23 +538,122 @@ def remove_download_failed_marker(
         )
 
 
-def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arguments
-    base_url: str,
+def _resume_offset(temp_filepath: str) -> int:
+    """returns the byte size of an existing partial download, or 0 if absent."""
+    try:
+        return os.path.getsize(temp_filepath)
+    except OSError:
+        return 0
+
+
+def _build_record_request(url: str, resume_from: int) -> urllib.request.Request:
+    """builds the record GET, adding the affinity key and a Range header when resuming."""
+    request = urllib.request.Request(url)
+    if affinity_key:
+        request.add_header("X-Affinity-Key", affinity_key)
+    if resume_from > 0:
+        request.add_header("Range", f"bytes={resume_from}-")
+    return request
+
+
+def _resume_decision(status: int, headers: object, resume_from: int) -> tuple[str, int]:
+    """determines how to handle the server response for a download attempt.
+
+    returns (action, total_bytes) where action is one of:
+      "resume"  -- confirmed 206 resume; use "ab" and start count from resume_from.
+      "restart" -- unconfirmed 206; discard partial and retry from byte 0.
+      "fresh"   -- 200 or any non-resume case; use "wb" and start count from 0.
+    """
+    content_length = int(headers.get("Content-Length") or 0)  # type: ignore[attr-defined]
+    if status == 206 and resume_from > 0:
+        m = content_range_re.fullmatch(
+            (headers.get("Content-Range") or "").strip()  # type: ignore[attr-defined]
+        )
+        if m is not None and int(m.group("start")) == resume_from:
+            total = m.group("total")
+            total_bytes = int(total) if total != "*" else resume_from + content_length
+            return "resume", total_bytes
+        # 206 but content-range is missing, malformed, or starts at the wrong
+        # offset -- writing this partial body as a complete file would corrupt it.
+        return "restart", 0
+    return "fresh", content_length
+
+
+def _stream_response(
+    response: object,
+    temp_filepath: str,
+    *,
+    append: bool,
+    total_bytes: int,
+    on_chunk: Callable[[int, int], None] | None,
+) -> int:
+    """writes the body to the temp file; returns bytes transferred this run."""
+    mode = "ab" if append else "wb"
+    downloaded = 0
+    with open(temp_filepath, mode) as f:
+        while True:
+            chunk = response.read(DOWNLOAD_CHUNK_SIZE)  # type: ignore[attr-defined]
+            if not chunk:
+                break
+            # cooperative stop check between read and write; the exception
+            # propagates to classify_run_failure and the job ends as failed.
+            if is_stop_requested():
+                raise UserWarning("sync stopped by user")
+            f.write(chunk)
+            downloaded += len(chunk)
+            if on_chunk is not None:
+                on_chunk(downloaded, total_bytes)
+    return downloaded
+
+
+def _log_download_success(
     filename: str,
+    destination_filepath: str,
+    transferred: int,
+    elapsed_s: float,
+    speed_bps: int | None,
+) -> None:
+    """emits the structured debug log for a successfully downloaded file."""
+    speed_str = format_natural_speed(speed_bps)
+    logger.debug(
+        "Downloaded file : %s%s",
+        filename,
+        speed_str,
+        extra={
+            "event": "file_downloaded",
+            "recording_filename": filename,
+            "destination_path": destination_filepath,
+            "content_length_bytes": transferred,
+            "elapsed_seconds": elapsed_s,
+            "speed_bps": speed_bps,
+        },
+    )
+
+
+def _log_download_failure(filename: str, error: object, *, marker: bool) -> None:
+    """emits the shared structured warning for a failed file download."""
+    cron_logger.warning(
+        "Could not download file : %s; error : %s; ignoring.",
+        filename,
+        error,
+        extra={
+            "event": "file_download_failed",
+            "recording_filename": filename,
+            "error_type": type(error).__name__,
+            "error": str(error),
+            "failure_marker_created": marker,
+        },
+    )
+
+
+def _precheck_download(
+    destination_filepath: str,
     destination: str,
     group_name: str | None,
-    metrics: SyncMetrics | None = None,
-    on_chunk: Callable[[int, int], None] | None = None,
-) -> tuple[bool, int | None]:
-    """downloads a file from the dashcam to the destination directory; returns whether data was transferred"""
-    # pylint: disable=too-many-branches,too-many-locals,too-many-statements
-    # if we have a group name, we may not have ensured it exists yet
-    if group_name:
-        group_filepath = os.path.join(destination, group_name)
-        ensure_destination(group_filepath)
-
-    destination_filepath = get_filepath(destination, group_name, filename)
-
+    filename: str,
+) -> tuple[bool, int | None] | None:
+    """checks guard conditions before a download attempt; returns a result tuple to
+    short-circuit, or None when the download should proceed."""
     if os.path.exists(destination_filepath):
         logger.debug(
             "Ignoring already downloaded file : %s",
@@ -567,11 +686,20 @@ def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arg
         )
         return False, None
 
-    # clears any prior failure marker now that we've decided to retry
-    remove_download_failed_marker(destination, group_name, filename)
+    return None
 
-    temp_filepath = os.path.join(destination, f".{filename}")
-    if os.path.exists(temp_filepath):
+
+def _transfer_to_temp(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    base_url: str,
+    filename: str,
+    temp_filepath: str,
+    resume_from: int,
+    on_chunk: Callable[[int, int], None] | None,
+) -> tuple[bool, int, float]:
+    """opens the dashcam HTTP connection, streams the body to the temp file, and
+    returns (needs_restart, transferred, elapsed_s). raises HTTPError/URLError/
+    socket.timeout on network failures; does not rename or log success."""
+    if resume_from:
         logger.debug(
             "Found incomplete download : %s",
             temp_filepath,
@@ -579,102 +707,118 @@ def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arg
                 "event": "incomplete_download_found",
                 "recording_filename": filename,
                 "temp_path": temp_filepath,
+                "resume_from_bytes": resume_from,
             },
         )
+
+    url = urllib.parse.urljoin(base_url, f"Record/{filename}")
+    start = time.perf_counter()
+    needs_restart = False
+    transferred = 0
+    try:
+        request = _build_record_request(url, resume_from)
+        with urllib.request.urlopen(request) as response:
+            action, total_bytes = _resume_decision(
+                response.getcode(), response.info(), resume_from
+            )
+            if action == "restart":
+                # unconfirmed 206: partial body cannot be safely written as
+                # a complete file; discard partial and retry from byte 0.
+                needs_restart = True
+            else:
+                transferred = _stream_response(
+                    response,
+                    temp_filepath,
+                    append=(action == "resume"),
+                    total_bytes=total_bytes,
+                    on_chunk=on_chunk,
+                )
+    finally:
+        elapsed_s = time.perf_counter() - start
+
+    return needs_restart, transferred, elapsed_s
+
+
+def _handle_http_error(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    e: urllib.error.HTTPError,
+    base_url: str,
+    filename: str,
+    destination: str,
+    group_name: str | None,
+    temp_filepath: str,
+    resume_from: int,
+    metrics: SyncMetrics | None,
+    on_chunk: Callable[[int, int], None] | None,
+) -> tuple[bool, int | None]:
+    """handles an HTTPError raised during a download attempt; either restarts
+    the download (416 with a partial present) or records the failure and returns."""
+    if e.code == 416 and resume_from > 0:
+        # the local partial is larger than the source (corrupt); discards and
+        # restarts once from byte 0. after removal _resume_offset returns 0,
+        # so the retry sends no Range header and cannot loop. a 416 on a
+        # no-Range request (resume_from == 0) falls through to generic
+        # http-error handling rather than retrying.
+        with contextlib.suppress(OSError):
+            os.remove(temp_filepath)
+        return download_file(
+            base_url, filename, destination, group_name, metrics, on_chunk
+        )
+    # other HTTP errors (e.g. 500 for corrupted recordings); marks as failed
+    if metrics:
+        metrics.record_file_download_failure("http")
+    _log_download_failure(filename, e, marker=True)
+    mark_download_failed(destination, group_name, filename)
+    return False, None
+
+
+def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    base_url: str,
+    filename: str,
+    destination: str,
+    group_name: str | None,
+    metrics: SyncMetrics | None = None,
+    on_chunk: Callable[[int, int], None] | None = None,
+) -> tuple[bool, int | None]:
+    """downloads a file from the dashcam to the destination directory; returns whether data was transferred"""
+    # if we have a group name, we may not have ensured it exists yet
+    if group_name:
+        ensure_destination(os.path.join(destination, group_name))
+
+    destination_filepath = get_filepath(destination, group_name, filename)
+
+    precheck = _precheck_download(
+        destination_filepath, destination, group_name, filename
+    )
+    if precheck is not None:
+        return precheck
+
+    # clears any prior failure marker now that we've decided to retry
+    remove_download_failed_marker(destination, group_name, filename)
+
+    temp_filepath = os.path.join(destination, f".{filename}")
+    resume_from = _resume_offset(temp_filepath)
 
     try:
-        url = urllib.parse.urljoin(base_url, f"Record/{filename}")
-
-        start = time.perf_counter()
-        try:
-            # request
-            request = urllib.request.Request(url)
-            if affinity_key:
-                request.add_header("X-Affinity-Key", affinity_key)
-
-            # downloads file
-            with urllib.request.urlopen(request) as response:
-                headers = response.info()
-                size = headers.get("Content-Length")
-
-                # writes response to temp file
-                downloaded_bytes = 0
-                total_bytes = int(size) if size else 0
-                with open(temp_filepath, "wb") as f:
-                    while True:
-                        chunk = response.read(DOWNLOAD_CHUNK_SIZE)
-                        if not chunk:
-                            break
-                        # cooperative stop check between read and write; the
-                        # exception propagates to classify_run_failure and the
-                        # job ends as failed.
-                        if is_stop_requested():
-                            raise UserWarning("sync stopped by user")
-                        f.write(chunk)
-                        downloaded_bytes += len(chunk)
-                        if on_chunk is not None:
-                            on_chunk(downloaded_bytes, total_bytes)
-        finally:
-            end = time.perf_counter()
-            elapsed_s = end - start
-
-        os.rename(temp_filepath, destination_filepath)
-
-        content_length_bytes = int(size) if size else None
-        speed_bps = int(10.0 * float(size) / elapsed_s) if size else None
-        speed_str = format_natural_speed(speed_bps)
-        logger.debug(
-            "Downloaded file : %s%s",
-            filename,
-            speed_str,
-            extra={
-                "event": "file_downloaded",
-                "recording_filename": filename,
-                "destination_path": destination_filepath,
-                "content_length_bytes": content_length_bytes,
-                "elapsed_seconds": elapsed_s,
-                "speed_bps": speed_bps,
-            },
+        needs_restart, transferred, elapsed_s = _transfer_to_temp(
+            base_url, filename, temp_filepath, resume_from, on_chunk
         )
-
-        if metrics:
-            metrics.record_file_download(content_length_bytes)
-
-        return True, speed_bps
     except urllib.error.HTTPError as e:
-        # HTTP errors (e.g. 500 for corrupted recordings); marks as failed to suppress retries
-        cron_logger.warning(
-            "Could not download file : %s; error : %s; ignoring.",
-            filename,
+        return _handle_http_error(
             e,
-            extra={
-                "event": "file_download_failed",
-                "recording_filename": filename,
-                "error_type": type(e).__name__,
-                "error": str(e),
-                "failure_marker_created": True,
-            },
+            base_url,
+            filename,
+            destination,
+            group_name,
+            temp_filepath,
+            resume_from,
+            metrics,
+            on_chunk,
         )
-        if metrics:
-            metrics.record_file_download_failure("http")
-        mark_download_failed(destination, group_name, filename)
-        return False, None
     except urllib.error.URLError as e:
         # network-level errors (connection reset, etc.); does not mark as failed
-        cron_logger.warning(
-            "Could not download file : %s; error : %s; ignoring.",
-            filename,
-            e,
-            extra={
-                "event": "file_download_failed",
-                "recording_filename": filename,
-                "error_type": type(e).__name__,
-                "error": str(e),
-                "failure_marker_created": False,
-            },
-        )
         if metrics:
             metrics.record_file_download_failure("network")
+        _log_download_failure(filename, e, marker=False)
         return False, None
     except socket.timeout as e:
         if metrics:
@@ -682,6 +826,22 @@ def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arg
         raise UserWarning(
             f"Timeout communicating with dashcam at address : {base_url}; error : {e}"
         ) from e
+
+    if needs_restart:
+        with contextlib.suppress(OSError):
+            os.remove(temp_filepath)
+        return download_file(
+            base_url, filename, destination, group_name, metrics, on_chunk
+        )
+
+    os.rename(temp_filepath, destination_filepath)
+    speed_bps = int(10.0 * transferred / elapsed_s) if transferred else None
+    _log_download_success(
+        filename, destination_filepath, transferred, elapsed_s, speed_bps
+    )
+    if metrics:
+        metrics.record_file_download(transferred)
+    return True, speed_bps
 
 
 def download_recording(  # pylint: disable=too-many-locals
@@ -738,60 +898,25 @@ def download_recording(  # pylint: disable=too-many-locals
                 publisher.finish_file(success=False, reason=type(exc).__name__)
             raise
 
-    # downloads the video recording
-    filename = recording.filename
-    downloaded, speed_bps = _dl(filename, "mp4")
-    any_downloaded |= downloaded
-
-    # downloads the thumbnail file
-    if "t" not in skip_metadata:
-        thm_filename = (
-            f"{recording.base_filename}_{recording.type}{recording.direction}.thm"
-        )
-        downloaded, _ = _dl(thm_filename, "thm")
+    speed_bps: int | None = None
+    for artifact_type, skip_key, build_filename in _ARTIFACTS:
+        if skip_key is not None and skip_key in skip_metadata:
+            metadata_type, fmt = _ARTIFACT_SKIP_LABEL[skip_key]
+            logger.debug(
+                fmt,
+                recording.base_filename,
+                extra={
+                    "event": "metadata_skipped",
+                    "metadata_type": metadata_type,
+                    "recording_base_filename": recording.base_filename,
+                },
+            )
+            continue
+        fn = build_filename(recording)
+        downloaded, artifact_speed = _dl(fn, artifact_type)
         any_downloaded |= downloaded
-    else:
-        logger.debug(
-            "Skipping thumbnail : %s (--skip-metadata)",
-            recording.base_filename,
-            extra={
-                "event": "metadata_skipped",
-                "metadata_type": "thumbnail",
-                "recording_base_filename": recording.base_filename,
-            },
-        )
-
-    # downloads the accelerometer data
-    if "3" not in skip_metadata:
-        tgf_filename = f"{recording.base_filename}_{recording.type}.3gf"
-        downloaded, _ = _dl(tgf_filename, "3gf")
-        any_downloaded |= downloaded
-    else:
-        logger.debug(
-            "Skipping accelerometer : %s (--skip-metadata)",
-            recording.base_filename,
-            extra={
-                "event": "metadata_skipped",
-                "metadata_type": "accelerometer",
-                "recording_base_filename": recording.base_filename,
-            },
-        )
-
-    # downloads the gps data
-    if "g" not in skip_metadata:
-        gps_filename = f"{recording.base_filename}_{recording.type}.gps"
-        downloaded, _ = _dl(gps_filename, "gps")
-        any_downloaded |= downloaded
-    else:
-        logger.debug(
-            "Skipping gps : %s (--skip-metadata)",
-            recording.base_filename,
-            extra={
-                "event": "metadata_skipped",
-                "metadata_type": "gps",
-                "recording_base_filename": recording.base_filename,
-            },
-        )
+        if artifact_type == "mp4":
+            speed_bps = artifact_speed
 
     # logs if any part of a recording was downloaded (or would have been)
     if any_downloaded:
@@ -1091,6 +1216,15 @@ def sync(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
     # sorts the dashcam recordings so we download them according to some priority
     sort_recordings(current_dashcam_recordings, download_priority)
 
+    # prunes partials for recordings no longer downloadable this run; preserves
+    # partials for recordings that are still current so they can be resumed.
+    expected_filenames = {
+        build_filename(r)
+        for r in current_dashcam_recordings
+        for (_artifact_type, _skip_key, build_filename) in _ARTIFACTS
+    }
+    prune_orphan_partials(destination, expected_filenames)
+
     if publisher is not None:
         publisher.begin_job(len(current_dashcam_recordings), job_id=job_id)
 
@@ -1115,17 +1249,6 @@ TEMP_FILENAME_GLOB = ".[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]_[0-9][0-9][0-9][
 
 def clean_destination(destination: str, grouping: str) -> None:
     """removes temporary artifacts from the destination directory"""
-    # removes temporary files from interrupted downloads
-    temp_filepath_glob = os.path.join(destination, TEMP_FILENAME_GLOB)
-    temp_filepaths = glob.glob(temp_filepath_glob)
-
-    for temp_filepath in temp_filepaths:
-        if not dry_run:
-            logger.debug("Removing temporary file : %s", temp_filepath)
-            os.remove(temp_filepath)
-        else:
-            logger.debug("DRY RUN Would remove temporary file : %s", temp_filepath)
-
     # removes empty grouping directories; ignores dotfiles such as .DS_Store
     group_name_glob = group_name_globs[grouping]
     if group_name_glob:
@@ -1142,6 +1265,24 @@ def clean_destination(destination: str, grouping: str) -> None:
                     logger.debug(
                         "DRY RUN Would remove grouping directory : %s", group_filepath
                     )
+
+
+def prune_orphan_partials(destination: str, expected_filenames: set[str]) -> None:
+    """removes partial dotfiles whose recording is no longer downloadable this run.
+
+    a partial is kept when its filename is in expected_filenames (it will be
+    resumed); otherwise it is an orphan (rolled off the dashcam, out of the
+    retention window, or now filtered out) and is removed."""
+    temp_glob = os.path.join(destination, TEMP_FILENAME_GLOB)
+    for temp_filepath in glob.glob(temp_glob):
+        filename = os.path.basename(temp_filepath)[1:]  # strips leading dot
+        if filename in expected_filenames:
+            continue
+        if dry_run:
+            logger.debug("DRY RUN Would remove orphan partial : %s", temp_filepath)
+            continue
+        logger.debug("Removing orphan partial : %s", temp_filepath)
+        os.remove(temp_filepath)
 
 
 def lock(destination: str) -> int:

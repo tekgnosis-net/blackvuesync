@@ -102,6 +102,11 @@ All UI endpoints require authentication (subject to `auth.mode`).
 All endpoints below require authentication (subject to `auth.mode`).
 CSRF protection applies to all `POST` requests (Flask-WTF global protection).
 
+When a download is interrupted, the partial file is preserved and the next
+sync resumes it via an HTTP range request (`Range: bytes=N-`). If the dashcam
+responds with `200` instead of `206`, the sync falls back to a full
+re-download.
+
 ### `GET /api/sync/progress`
 
 Returns the current sync progress snapshot as JSON.
