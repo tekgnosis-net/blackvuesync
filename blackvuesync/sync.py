@@ -596,6 +596,30 @@ def _stream_response(  # pylint: disable=too-many-locals
     return downloaded - start_at, total_bytes
 
 
+def _log_download_success(
+    filename: str,
+    destination_filepath: str,
+    transferred: int,
+    elapsed_s: float,
+    speed_bps: int | None,
+) -> None:
+    """emits the structured debug log for a successfully downloaded file."""
+    speed_str = format_natural_speed(speed_bps)
+    logger.debug(
+        "Downloaded file : %s%s",
+        filename,
+        speed_str,
+        extra={
+            "event": "file_downloaded",
+            "recording_filename": filename,
+            "destination_path": destination_filepath,
+            "content_length_bytes": transferred,
+            "elapsed_seconds": elapsed_s,
+            "speed_bps": speed_bps,
+        },
+    )
+
+
 def _log_download_failure(filename: str, error: object, *, marker: bool) -> None:
     """emits the shared structured warning for a failed file download."""
     cron_logger.warning(
@@ -692,19 +716,8 @@ def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arg
         os.rename(temp_filepath, destination_filepath)
 
         speed_bps = int(10.0 * transferred / elapsed_s) if transferred else None
-        speed_str = format_natural_speed(speed_bps)
-        logger.debug(
-            "Downloaded file : %s%s",
-            filename,
-            speed_str,
-            extra={
-                "event": "file_downloaded",
-                "recording_filename": filename,
-                "destination_path": destination_filepath,
-                "content_length_bytes": transferred,
-                "elapsed_seconds": elapsed_s,
-                "speed_bps": speed_bps,
-            },
+        _log_download_success(
+            filename, destination_filepath, transferred, elapsed_s, speed_bps
         )
 
         if metrics:

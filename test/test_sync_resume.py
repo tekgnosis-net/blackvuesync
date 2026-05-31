@@ -19,7 +19,10 @@ _RANGE_RE = re.compile(r"bytes=(\d+)-")
 
 
 class _RangeHandler(BaseHTTPRequestHandler):
-    """serves _PAYLOAD honoring a single open-ended Range with 206."""
+    """serves _PAYLOAD honoring a single open-ended Range with 206.
+
+    returns 416 when the requested start is >= len(_PAYLOAD).
+    """
 
     seen_range: str | None = None
 
@@ -28,6 +31,10 @@ class _RangeHandler(BaseHTTPRequestHandler):
         type(self).seen_range = rng
         if rng and (m := _RANGE_RE.fullmatch(rng.strip())):
             start = int(m.group(1))
+            if start >= len(_PAYLOAD):
+                self.send_response(416)
+                self.end_headers()
+                return
             body = _PAYLOAD[start:]
             self.send_response(206)
             self.send_header("Content-Length", str(len(body)))
@@ -39,6 +46,24 @@ class _RangeHandler(BaseHTTPRequestHandler):
             return
         self.send_response(200)
         self.send_header("Content-Length", str(len(_PAYLOAD)))
+        self.end_headers()
+        self.wfile.write(_PAYLOAD)
+
+    def log_message(self, fmt: str, *args: object) -> None:  # noqa: A002
+        """silences test server logging."""
+
+
+class _MismatchedRangeHandler(BaseHTTPRequestHandler):
+    """always responds 206 with Content-Range starting at 0, regardless of the
+    requested Range; simulates a server that sends the full payload as 206."""
+
+    def do_GET(self) -> None:  # noqa: N802
+        self.send_response(206)
+        self.send_header("Content-Length", str(len(_PAYLOAD)))
+        self.send_header(
+            "Content-Range",
+            f"bytes 0-{len(_PAYLOAD) - 1}/{len(_PAYLOAD)}",
+        )
         self.end_headers()
         self.wfile.write(_PAYLOAD)
 
@@ -77,6 +102,11 @@ def range_server() -> Generator[str, None, None]:
 @pytest.fixture()
 def norange_server() -> Generator[str, None, None]:
     yield from _serve(_NoRangeHandler)
+
+
+@pytest.fixture()
+def mismatched_range_server() -> Generator[str, None, None]:
+    yield from _serve(_MismatchedRangeHandler)
 
 
 def _seed_partial(destination: Path, nbytes: int) -> None:
@@ -139,3 +169,27 @@ class TestResume:
         # partial survives (and is at least the seeded size); no final file
         assert (tmp_path / f".{_FILENAME}").exists()
         assert not (tmp_path / _FILENAME).exists()
+
+    def test_mismatched_content_range_start_triggers_full_restart(
+        self, mismatched_range_server: str, tmp_path: Path
+    ) -> None:
+        # server returns 206 but Content-Range start is 0, not 3000;
+        # download_file must treat this as a full restart and produce the correct file.
+        _seed_partial(tmp_path, 3000)
+        ok, _ = download_file(mismatched_range_server, _FILENAME, str(tmp_path), None)
+        assert ok is True
+        assert _final(tmp_path) == _PAYLOAD
+
+    def test_416_discards_partial_and_restarts(
+        self, range_server: str, tmp_path: Path
+    ) -> None:
+        # seed a partial larger than _PAYLOAD so the resume offset exceeds the
+        # source size; the server returns 416, the partial is discarded, and
+        # download_file retries once from byte 0 producing the correct final file.
+        oversized = _PAYLOAD + b"\x00" * 100
+        (tmp_path / f".{_FILENAME}").write_bytes(oversized)
+        ok, _ = download_file(range_server, _FILENAME, str(tmp_path), None)
+        assert ok is True
+        assert _final(tmp_path) == _PAYLOAD
+        # partial dotfile must be gone after the successful retry
+        assert not (tmp_path / f".{_FILENAME}").exists()
