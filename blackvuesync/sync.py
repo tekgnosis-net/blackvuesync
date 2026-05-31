@@ -646,22 +646,14 @@ def _log_download_failure(filename: str, error: object, *, marker: bool) -> None
     )
 
 
-def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-branches,too-many-locals,too-many-return-statements,too-many-statements
-    base_url: str,
-    filename: str,
+def _precheck_download(
+    destination_filepath: str,
     destination: str,
     group_name: str | None,
-    metrics: SyncMetrics | None = None,
-    on_chunk: Callable[[int, int], None] | None = None,
-) -> tuple[bool, int | None]:
-    """downloads a file from the dashcam to the destination directory; returns whether data was transferred"""
-    # if we have a group name, we may not have ensured it exists yet
-    if group_name:
-        group_filepath = os.path.join(destination, group_name)
-        ensure_destination(group_filepath)
-
-    destination_filepath = get_filepath(destination, group_name, filename)
-
+    filename: str,
+) -> tuple[bool, int | None] | None:
+    """checks guard conditions before a download attempt; returns a result tuple to
+    short-circuit, or None when the download should proceed."""
     if os.path.exists(destination_filepath):
         logger.debug(
             "Ignoring already downloaded file : %s",
@@ -694,11 +686,19 @@ def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arg
         )
         return False, None
 
-    # clears any prior failure marker now that we've decided to retry
-    remove_download_failed_marker(destination, group_name, filename)
+    return None
 
-    temp_filepath = os.path.join(destination, f".{filename}")
-    resume_from = _resume_offset(temp_filepath)
+
+def _transfer_to_temp(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    base_url: str,
+    filename: str,
+    temp_filepath: str,
+    resume_from: int,
+    on_chunk: Callable[[int, int], None] | None,
+) -> tuple[bool, int, float]:
+    """opens the dashcam HTTP connection, streams the body to the temp file, and
+    returns (needs_restart, transferred, elapsed_s). raises HTTPError/URLError/
+    socket.timeout on network failures; does not rename or log success."""
     if resume_from:
         logger.debug(
             "Found incomplete download : %s",
@@ -711,68 +711,109 @@ def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arg
             },
         )
 
+    url = urllib.parse.urljoin(base_url, f"Record/{filename}")
+    start = time.perf_counter()
+    needs_restart = False
+    transferred = 0
     try:
-        url = urllib.parse.urljoin(base_url, f"Record/{filename}")
-        start = time.perf_counter()
-        needs_restart = False
-        transferred = 0
-        try:
-            request = _build_record_request(url, resume_from)
-            with urllib.request.urlopen(request) as response:
-                action, total_bytes = _resume_decision(
-                    response.getcode(), response.info(), resume_from
+        request = _build_record_request(url, resume_from)
+        with urllib.request.urlopen(request) as response:
+            action, total_bytes = _resume_decision(
+                response.getcode(), response.info(), resume_from
+            )
+            if action == "restart":
+                # unconfirmed 206: partial body cannot be safely written as
+                # a complete file; discard partial and retry from byte 0.
+                needs_restart = True
+            else:
+                transferred = _stream_response(
+                    response,
+                    temp_filepath,
+                    append=(action == "resume"),
+                    total_bytes=total_bytes,
+                    on_chunk=on_chunk,
                 )
-                if action == "restart":
-                    # unconfirmed 206: partial body cannot be safely written as
-                    # a complete file; discard partial and retry from byte 0.
-                    needs_restart = True
-                else:
-                    transferred = _stream_response(
-                        response,
-                        temp_filepath,
-                        append=(action == "resume"),
-                        total_bytes=total_bytes,
-                        on_chunk=on_chunk,
-                    )
-        finally:
-            elapsed_s = time.perf_counter() - start
+    finally:
+        elapsed_s = time.perf_counter() - start
 
-        if needs_restart:
-            with contextlib.suppress(OSError):
-                os.remove(temp_filepath)
-            return download_file(
-                base_url, filename, destination, group_name, metrics, on_chunk
-            )
+    return needs_restart, transferred, elapsed_s
 
-        os.rename(temp_filepath, destination_filepath)
 
-        speed_bps = int(10.0 * transferred / elapsed_s) if transferred else None
-        _log_download_success(
-            filename, destination_filepath, transferred, elapsed_s, speed_bps
+def _handle_http_error(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    e: urllib.error.HTTPError,
+    base_url: str,
+    filename: str,
+    destination: str,
+    group_name: str | None,
+    temp_filepath: str,
+    resume_from: int,
+    metrics: SyncMetrics | None,
+    on_chunk: Callable[[int, int], None] | None,
+) -> tuple[bool, int | None]:
+    """handles an HTTPError raised during a download attempt; either restarts
+    the download (416 with a partial present) or records the failure and returns."""
+    if e.code == 416 and resume_from > 0:
+        # the local partial is larger than the source (corrupt); discards and
+        # restarts once from byte 0. after removal _resume_offset returns 0,
+        # so the retry sends no Range header and cannot loop. a 416 on a
+        # no-Range request (resume_from == 0) falls through to generic
+        # http-error handling rather than retrying.
+        with contextlib.suppress(OSError):
+            os.remove(temp_filepath)
+        return download_file(
+            base_url, filename, destination, group_name, metrics, on_chunk
         )
+    # other HTTP errors (e.g. 500 for corrupted recordings); marks as failed
+    if metrics:
+        metrics.record_file_download_failure("http")
+    _log_download_failure(filename, e, marker=True)
+    mark_download_failed(destination, group_name, filename)
+    return False, None
 
-        if metrics:
-            metrics.record_file_download(transferred)
 
-        return True, speed_bps
+def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+    base_url: str,
+    filename: str,
+    destination: str,
+    group_name: str | None,
+    metrics: SyncMetrics | None = None,
+    on_chunk: Callable[[int, int], None] | None = None,
+) -> tuple[bool, int | None]:
+    """downloads a file from the dashcam to the destination directory; returns whether data was transferred"""
+    # if we have a group name, we may not have ensured it exists yet
+    if group_name:
+        ensure_destination(os.path.join(destination, group_name))
+
+    destination_filepath = get_filepath(destination, group_name, filename)
+
+    precheck = _precheck_download(
+        destination_filepath, destination, group_name, filename
+    )
+    if precheck is not None:
+        return precheck
+
+    # clears any prior failure marker now that we've decided to retry
+    remove_download_failed_marker(destination, group_name, filename)
+
+    temp_filepath = os.path.join(destination, f".{filename}")
+    resume_from = _resume_offset(temp_filepath)
+
+    try:
+        needs_restart, transferred, elapsed_s = _transfer_to_temp(
+            base_url, filename, temp_filepath, resume_from, on_chunk
+        )
     except urllib.error.HTTPError as e:
-        if e.code == 416 and resume_from > 0:
-            # the local partial is larger than the source (corrupt); discards and
-            # restarts once from byte 0. after removal _resume_offset returns 0,
-            # so the retry sends no Range header and cannot loop. a 416 on a
-            # no-Range request (resume_from == 0) falls through to generic
-            # http-error handling rather than retrying.
-            with contextlib.suppress(OSError):
-                os.remove(temp_filepath)
-            return download_file(
-                base_url, filename, destination, group_name, metrics, on_chunk
-            )
-        # other HTTP errors (e.g. 500 for corrupted recordings); marks as failed
-        if metrics:
-            metrics.record_file_download_failure("http")
-        _log_download_failure(filename, e, marker=True)
-        mark_download_failed(destination, group_name, filename)
-        return False, None
+        return _handle_http_error(
+            e,
+            base_url,
+            filename,
+            destination,
+            group_name,
+            temp_filepath,
+            resume_from,
+            metrics,
+            on_chunk,
+        )
     except urllib.error.URLError as e:
         # network-level errors (connection reset, etc.); does not mark as failed
         if metrics:
@@ -785,6 +826,22 @@ def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arg
         raise UserWarning(
             f"Timeout communicating with dashcam at address : {base_url}; error : {e}"
         ) from e
+
+    if needs_restart:
+        with contextlib.suppress(OSError):
+            os.remove(temp_filepath)
+        return download_file(
+            base_url, filename, destination, group_name, metrics, on_chunk
+        )
+
+    os.rename(temp_filepath, destination_filepath)
+    speed_bps = int(10.0 * transferred / elapsed_s) if transferred else None
+    _log_download_success(
+        filename, destination_filepath, transferred, elapsed_s, speed_bps
+    )
+    if metrics:
+        metrics.record_file_download(transferred)
+    return True, speed_bps
 
 
 def download_recording(  # pylint: disable=too-many-locals
