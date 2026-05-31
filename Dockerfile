@@ -1,3 +1,17 @@
+# builder stage: installs the runtime deps with uv into an isolated venv. uv is
+# much faster than pip and reuses pyproject.toml-pinned versions consistently
+# across dev and image builds. confining uv to this stage keeps it -- and the
+# bytes of its COPY layer -- out of the final image entirely.
+FROM alpine:3.23.4 AS builder
+
+RUN apk add --update python3
+COPY --from=ghcr.io/astral-sh/uv:0.11.15 /uv /usr/local/bin/uv
+RUN uv venv /opt/venv \
+    && VIRTUAL_ENV=/opt/venv uv pip install --no-cache \
+        "Flask~=3.1" "Flask-WTF~=1.2" "waitress~=3.0" \
+        "argon2-cffi~=23.1" "APScheduler~=3.10"
+
+# final stage: starts clean and copies only the populated venv from the builder.
 FROM alpine:3.23.4
 
 LABEL org.opencontainers.image.title="BlackVue Sync"
@@ -13,21 +27,12 @@ RUN apk add --update bash python3 shadow su-exec tzdata \
     && rm -rf /var/cache/apk/* \
     && useradd -UMr dashcam
 
-# pulls the uv binary from Astral's pinned image. uv installs runtime deps much
-# faster than pip and reuses pyproject.toml-pinned versions consistently across
-# dev and image builds. NOTE: this COPY adds the uv binary to its own layer;
-# the rm in the RUN below shrinks the working tree but does not reclaim the
-# COPY layer's bytes. Phase G will migrate to a multi-stage build to drop uv
-# from the final image entirely.
-COPY --from=ghcr.io/astral-sh/uv:0.11.15 /uv /usr/local/bin/uv
-
-# installs Python runtime deps into the system interpreter. Alpine's Python is
-# marked PEP 668 externally-managed, so --break-system-packages is required;
-# this is safe inside a container we own and run.
-RUN uv pip install --system --break-system-packages --no-cache \
-        "Flask~=3.1" "Flask-WTF~=1.2" "waitress~=3.0" \
-        "argon2-cffi~=23.1" "APScheduler~=3.10" \
-    && rm /usr/local/bin/uv
+# copies the dependency venv built in the previous stage. both stages share the
+# same alpine base, so the venv's interpreter matches the system python3 here.
+# placing the venv first on PATH makes the entrypoint's `python` resolve to the
+# interpreter that can import the runtime deps.
+COPY --from=builder /opt/venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
 
 COPY COPYING /
 COPY setuid.sh /setuid.sh
