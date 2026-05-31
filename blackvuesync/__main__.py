@@ -25,7 +25,7 @@ from blackvuesync.metrics import (
     parse_pushgateway_url,
     save_metrics_state,
 )
-from blackvuesync.settings import SettingsStore
+from blackvuesync.settings import LoggingSettings, Settings, SettingsStore
 from blackvuesync.sync import (
     LOG_FORMATS,
     calc_cutoff_date,
@@ -266,6 +266,30 @@ def parse_args() -> argparse.Namespace:
     return arg_parser.parse_args()
 
 
+def _apply_logging_settings(logging_settings: LoggingSettings) -> None:
+    """applies log format and level from the logging section. shared by startup
+    and the on_change listener so a logging change takes effect live. serve mode
+    keeps a floor of INFO so scheduler/waitress lines always emit; quiet still
+    suppresses everything below ERROR."""
+    configure_logging(logging_settings.format)
+    if logging_settings.quiet:
+        set_logging_levels(-1, False)
+    else:
+        set_logging_levels(max(1, logging_settings.verbose), False)
+
+
+def _register_logging_reload(store: SettingsStore) -> None:
+    """re-applies logging settings whenever the logging section changes, so a
+    settings update takes effect without a restart (logging is TIER immediate)."""
+
+    def _on_change(old: Settings, new: Settings) -> None:
+        """re-applies logging when the logging section changes."""
+        if new.logging != old.logging:
+            _apply_logging_settings(new.logging)
+
+    store.on_change(_on_change)
+
+
 def cmd_sync(args: argparse.Namespace) -> int:
     """runs the sync workflow and returns the exit code."""
     # pylint: disable=too-many-branches,too-many-statements
@@ -445,16 +469,13 @@ def cmd_serve(args: argparse.Namespace) -> int:
     # waitress startup lines always emit regardless of the user's verbose
     # setting (operators need to see them in docker logs); quiet=true still
     # suppresses everything below ERROR.
-    configure_logging(settings.logging.format)
-    if settings.logging.quiet:
-        set_logging_levels(-1, False)
-    else:
-        set_logging_levels(max(1, settings.logging.verbose), False)
+    _apply_logging_settings(settings.logging)
     publisher = ProgressPublisher()
     app = create_app(store, progress_publisher=publisher)
     port = args.port if args.port is not None else settings.web.port
 
     scheduler = init_scheduler(store, publisher)
+    _register_logging_reload(store)
     logger.info(
         "scheduler started: %r (%s)",
         settings.schedule.cron_expression,
