@@ -7,6 +7,21 @@ from behave.runner import Context
 from features.lib.recordings import filter_recording_filenames_by_period
 
 
+@given("these recordings on the dashcam:")
+def dashcam_recordings_table(context: Context) -> None:
+    """configures mock dashcam with an explicit list of recordings from a table."""
+    filenames = [row["filename"] for row in context.table]
+
+    url = f"{context.mock_dashcam_url}/mock/recordings/filenames"
+    headers = {"X-Affinity-Key": context.scenario_token}
+    data = {"recordings": filenames}
+
+    response = requests.post(url, json=data, headers=headers, timeout=10)
+    response.raise_for_status()
+
+    context.expected_recordings = filenames
+
+
 @given(
     'recordings between "{period_start}" and "{period_end}" ago of types "{recording_types}", directions "{recording_directions}", other "{recording_others}"'
 )
