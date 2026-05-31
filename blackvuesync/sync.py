@@ -135,6 +135,9 @@ skip_metadata: set[str] = set()  # pylint: disable=invalid-name
 # duration regex for --keep and --retry-failed-after
 duration_re = re.compile(r"""(?P<range>\d+)(?P<unit>[shdw]?)""")
 
+# parses a Content-Range value such as "bytes 100-199/500" (total may be "*")
+content_range_re = re.compile(r"bytes\s+(?P<start>\d+)-\d+/(?P<total>\d+|\*)")
+
 # cutoff date; only recordings from this date on are downloaded and kept
 cutoff_date: datetime.date | None = None  # pylint: disable=invalid-name
 
@@ -535,7 +538,81 @@ def remove_download_failed_marker(
         )
 
 
-def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+def _resume_offset(temp_filepath: str) -> int:
+    """returns the byte size of an existing partial download, or 0 if absent."""
+    try:
+        return os.path.getsize(temp_filepath)
+    except OSError:
+        return 0
+
+
+def _build_record_request(url: str, resume_from: int) -> urllib.request.Request:
+    """builds the record GET, adding the affinity key and a Range header when resuming."""
+    request = urllib.request.Request(url)
+    if affinity_key:
+        request.add_header("X-Affinity-Key", affinity_key)
+    if resume_from > 0:
+        request.add_header("Range", f"bytes={resume_from}-")
+    return request
+
+
+def _stream_response(  # pylint: disable=too-many-locals
+    response: object,
+    temp_filepath: str,
+    resume_from: int,
+    on_chunk: Callable[[int, int], None] | None,
+) -> tuple[int, int]:
+    """writes the body to the temp file, appending when the server confirms a 206
+    resume and truncating otherwise; returns (bytes_transferred, total_bytes)."""
+    status = response.getcode()  # type: ignore[attr-defined]
+    headers = response.info()  # type: ignore[attr-defined]
+    content_length = int(headers.get("Content-Length") or 0)
+
+    resume_ok = False
+    total_bytes = content_length
+    if status == 206 and resume_from > 0:
+        m = content_range_re.fullmatch((headers.get("Content-Range") or "").strip())
+        if m is not None and int(m.group("start")) == resume_from:
+            resume_ok = True
+            total = m.group("total")
+            total_bytes = int(total) if total != "*" else resume_from + content_length
+
+    mode = "ab" if resume_ok else "wb"
+    downloaded = resume_from if resume_ok else 0
+    start_at = downloaded
+    with open(temp_filepath, mode) as f:
+        while True:
+            chunk = response.read(DOWNLOAD_CHUNK_SIZE)  # type: ignore[attr-defined]
+            if not chunk:
+                break
+            # cooperative stop check between read and write; the exception
+            # propagates to classify_run_failure and the job ends as failed.
+            if is_stop_requested():
+                raise UserWarning("sync stopped by user")
+            f.write(chunk)
+            downloaded += len(chunk)
+            if on_chunk is not None:
+                on_chunk(downloaded, total_bytes)
+    return downloaded - start_at, total_bytes
+
+
+def _log_download_failure(filename: str, error: object, *, marker: bool) -> None:
+    """emits the shared structured warning for a failed file download."""
+    cron_logger.warning(
+        "Could not download file : %s; error : %s; ignoring.",
+        filename,
+        error,
+        extra={
+            "event": "file_download_failed",
+            "recording_filename": filename,
+            "error_type": type(error).__name__,
+            "error": str(error),
+            "failure_marker_created": marker,
+        },
+    )
+
+
+def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-branches,too-many-locals,too-many-return-statements
     base_url: str,
     filename: str,
     destination: str,
@@ -544,7 +621,6 @@ def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arg
     on_chunk: Callable[[int, int], None] | None = None,
 ) -> tuple[bool, int | None]:
     """downloads a file from the dashcam to the destination directory; returns whether data was transferred"""
-    # pylint: disable=too-many-branches,too-many-locals,too-many-statements
     # if we have a group name, we may not have ensured it exists yet
     if group_name:
         group_filepath = os.path.join(destination, group_name)
@@ -588,7 +664,8 @@ def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arg
     remove_download_failed_marker(destination, group_name, filename)
 
     temp_filepath = os.path.join(destination, f".{filename}")
-    if os.path.exists(temp_filepath):
+    resume_from = _resume_offset(temp_filepath)
+    if resume_from:
         logger.debug(
             "Found incomplete download : %s",
             temp_filepath,
@@ -596,49 +673,25 @@ def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arg
                 "event": "incomplete_download_found",
                 "recording_filename": filename,
                 "temp_path": temp_filepath,
+                "resume_from_bytes": resume_from,
             },
         )
 
     try:
         url = urllib.parse.urljoin(base_url, f"Record/{filename}")
-
         start = time.perf_counter()
         try:
-            # request
-            request = urllib.request.Request(url)
-            if affinity_key:
-                request.add_header("X-Affinity-Key", affinity_key)
-
-            # downloads file
+            request = _build_record_request(url, resume_from)
             with urllib.request.urlopen(request) as response:
-                headers = response.info()
-                size = headers.get("Content-Length")
-
-                # writes response to temp file
-                downloaded_bytes = 0
-                total_bytes = int(size) if size else 0
-                with open(temp_filepath, "wb") as f:
-                    while True:
-                        chunk = response.read(DOWNLOAD_CHUNK_SIZE)
-                        if not chunk:
-                            break
-                        # cooperative stop check between read and write; the
-                        # exception propagates to classify_run_failure and the
-                        # job ends as failed.
-                        if is_stop_requested():
-                            raise UserWarning("sync stopped by user")
-                        f.write(chunk)
-                        downloaded_bytes += len(chunk)
-                        if on_chunk is not None:
-                            on_chunk(downloaded_bytes, total_bytes)
+                transferred, _total = _stream_response(
+                    response, temp_filepath, resume_from, on_chunk
+                )
         finally:
-            end = time.perf_counter()
-            elapsed_s = end - start
+            elapsed_s = time.perf_counter() - start
 
         os.rename(temp_filepath, destination_filepath)
 
-        content_length_bytes = int(size) if size else None
-        speed_bps = int(10.0 * float(size) / elapsed_s) if size else None
+        speed_bps = int(10.0 * transferred / elapsed_s) if transferred else None
         speed_str = format_natural_speed(speed_bps)
         logger.debug(
             "Downloaded file : %s%s",
@@ -648,50 +701,37 @@ def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arg
                 "event": "file_downloaded",
                 "recording_filename": filename,
                 "destination_path": destination_filepath,
-                "content_length_bytes": content_length_bytes,
+                "content_length_bytes": transferred,
                 "elapsed_seconds": elapsed_s,
                 "speed_bps": speed_bps,
             },
         )
 
         if metrics:
-            metrics.record_file_download(content_length_bytes)
+            metrics.record_file_download(transferred)
 
         return True, speed_bps
     except urllib.error.HTTPError as e:
-        # HTTP errors (e.g. 500 for corrupted recordings); marks as failed to suppress retries
-        cron_logger.warning(
-            "Could not download file : %s; error : %s; ignoring.",
-            filename,
-            e,
-            extra={
-                "event": "file_download_failed",
-                "recording_filename": filename,
-                "error_type": type(e).__name__,
-                "error": str(e),
-                "failure_marker_created": True,
-            },
-        )
+        if e.code == 416:
+            # the local partial is larger than the source (corrupt); discards and
+            # restarts once from byte 0. after removal _resume_offset returns 0,
+            # so the retry sends no Range header and cannot loop.
+            with contextlib.suppress(OSError):
+                os.remove(temp_filepath)
+            return download_file(
+                base_url, filename, destination, group_name, metrics, on_chunk
+            )
+        # other HTTP errors (e.g. 500 for corrupted recordings); marks as failed
         if metrics:
             metrics.record_file_download_failure("http")
+        _log_download_failure(filename, e, marker=True)
         mark_download_failed(destination, group_name, filename)
         return False, None
     except urllib.error.URLError as e:
         # network-level errors (connection reset, etc.); does not mark as failed
-        cron_logger.warning(
-            "Could not download file : %s; error : %s; ignoring.",
-            filename,
-            e,
-            extra={
-                "event": "file_download_failed",
-                "recording_filename": filename,
-                "error_type": type(e).__name__,
-                "error": str(e),
-                "failure_marker_created": False,
-            },
-        )
         if metrics:
             metrics.record_file_download_failure("network")
+        _log_download_failure(filename, e, marker=False)
         return False, None
     except socket.timeout as e:
         if metrics:
