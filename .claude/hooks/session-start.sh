@@ -23,6 +23,8 @@ fi
 pre-commit install
 pre-commit install --hook-type commit-msg
 
-# activates the venv for the session
-# shellcheck disable=SC2016
-echo 'source "$CLAUDE_PROJECT_DIR/venv/bin/activate"' >> "$CLAUDE_ENV_FILE"
+# activates the venv for the session. CLAUDE_PROJECT_DIR is expanded now, while
+# the hook runs (it is empty in the per-call shell that later sources the env
+# file), so the file holds an absolute path. falls back to the hook's cwd, which
+# is the project root.
+echo "source \"${CLAUDE_PROJECT_DIR:-$PWD}/venv/bin/activate\"" >> "$CLAUDE_ENV_FILE"
