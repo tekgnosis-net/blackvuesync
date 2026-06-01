@@ -353,19 +353,21 @@ All scenarios run in both `subprocess` and `docker` modes. No harness extension 
 | Browser-side visual regression CI | out of scope (entire series) |
 | Mobile-first responsive design | out of scope (responsive but not mobile-optimized) |
 
-### Carry-forwards from the foundation (still deferred)
+### Carry-forwards from the foundation (resolved before 2C)
 
-- `sync.py` cognitive-complexity decomposition of `download_file` and `download_recording` (S3776) -- separate cleanup PR
-- Multi-stage Dockerfile to drop the uv binary from the final image -- separate Docker optimization PR
-- `LoggingSettings.on_change` listener wiring -- sub-project #3
-- byte-range resume of interrupted downloads, paired with the `download_file` /
-  `download_recording` S3776 decomposition (one PR) -- see
-  `docs/plans/2026-06-01-download-resume-design.md`. today the dotfile pattern
-  gives atomicity (rename-on-complete), not resume: `download_file` truncates the
-  partial and sends no `Range` header, and `clean_destination` deletes every
-  partial in a `finally`. the design adds a runtime range probe (the resume
-  `GET` itself) with a `200`/`416` full-restart fallback, keeps resumable
-  partials across runs, and prunes orphaned partials at sync start.
+All four foundation carry-forwards were cleared in the pre-2C cleanup:
+
+- `sync.py` cognitive-complexity decomposition of `download_file` and
+  `download_recording` (S3776) -- done in #13 (paired with resume below).
+- byte-range resume of interrupted downloads -- done in #13. the dotfile pattern
+  now resumes via a runtime range probe (the resume `GET` itself) with a
+  `200`/`416`/unconfirmed-`206` full-restart fallback; partials persist across
+  runs and orphans are pruned at sync start. see
+  `docs/plans/2026-06-01-download-resume-design.md`.
+- Multi-stage Dockerfile to drop the uv binary from the final image -- done in
+  #14 (image 169MB -> 88MB).
+- `LoggingSettings.on_change` listener wiring -- done in #15 (live logging
+  reload in `cmd_serve`, no longer deferred to sub-project #3).
 
 ### Open questions deferred to specific phases
 
