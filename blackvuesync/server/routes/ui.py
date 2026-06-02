@@ -33,6 +33,8 @@ def dashboard() -> str:
     destination = Path(current.system.destination)
     publisher = current_app.progress_publisher  # type: ignore[attr-defined]
     schedule = current.schedule
+    snap = publisher.snapshot()
+    sync_state = "running" if snap.state == "running" else "idle"
 
     last_run_html = render_template(
         "_partials/last_run_card.html", snap=publisher.snapshot()
@@ -61,6 +63,8 @@ def dashboard() -> str:
         next_scheduled_html=next_scheduled_html,
         storage_html=storage_html,
         recent_activity_html=recent_activity_html,
+        sync_state=sync_state,
+        paused=schedule.paused,
     )
 
 

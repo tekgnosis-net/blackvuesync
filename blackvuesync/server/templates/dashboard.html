@@ -8,6 +8,12 @@
 
 {% block footer_version %}{{ version }}{% endblock %}
 
+{% block data_state %}{{ sync_state }}{% endblock %}
+
+{% block extra_js %}
+  <script src="{{ url_for('static', filename='js/dashboard.js') }}" defer></script>
+{% endblock %}
+
 {% block content %}
 <div class="dashboard">
   <aside class="dashboard-sidebar">
