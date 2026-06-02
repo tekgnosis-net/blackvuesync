@@ -46,6 +46,7 @@ dev = [
     "pytest~=8.3",
     "pytest-cov~=7.0",
     "pytest-flask~=1.3",
+    "pytest-playwright~=0.6",
     "python-lsp-server~=1.14",
     "requests~=2.32",
     "ruff~=0.9",

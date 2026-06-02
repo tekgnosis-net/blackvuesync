@@ -30,9 +30,8 @@ document.addEventListener("alpine:init", () => {
 
     init() {
       this.progress.state = document.body.dataset.state || "idle";
-      if (this.progress.state === "running") {
-        this.openStream();
-      }
+      // always open the stream so externally-started syncs are also detected.
+      this.openStream();
     },
 
     // single writer of body[data-state]; css does the rest
@@ -93,14 +92,17 @@ document.addEventListener("alpine:init", () => {
         if (snap.state === "complete" || snap.state === "failed") {
           this.closeStream();
           window.setTimeout(() => {
-            if (!this._source) this.setState("idle");
+            if (!this._source) {
+              this.setState("idle");
+              this.openStream(); // reopen to detect future syncs
+            }
           }, COMPLETE_LINGER_MS);
         }
       });
       es.onerror = () => {
         this.closeStream();
         this._reconnectTimer = window.setTimeout(() => {
-          if (document.body.dataset.state === "running") this.openStream();
+          this.openStream(); // reconnect regardless of state to detect any sync
         }, this._backoffMs);
         this._backoffMs = Math.min(this._backoffMs * 2, SSE_BACKOFF_MAX_MS);
       };
