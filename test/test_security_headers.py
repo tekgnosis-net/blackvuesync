@@ -117,6 +117,13 @@ def test_hsts_not_set_for_http_request(client: FlaskClient) -> None:
     assert "Strict-Transport-Security" not in r.headers
 
 
+def test_csp_script_src_no_unsafe_eval(client: FlaskClient) -> None:
+    """verifies script-src never contains unsafe-eval (csp alpine build regression guard)."""
+    r = client.get("/healthz")
+    csp = r.headers["Content-Security-Policy"]
+    assert "unsafe-eval" not in csp
+
+
 def test_security_headers_on_non_healthz_route(client: FlaskClient) -> None:
     """verifies security headers are present on all routes, not just /healthz."""
     r = client.get("/login")

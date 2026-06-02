@@ -1,6 +1,6 @@
 [project]
 name = "blackvuesync"
-version = "2.4.0a3"
+version = "2.4.0b0"
 description = "Synchronize recordings from BlackVue dashcams to a local directory"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -46,6 +46,7 @@ dev = [
     "pytest~=8.3",
     "pytest-cov~=7.0",
     "pytest-flask~=1.3",
+    "pytest-playwright~=0.6",
     "python-lsp-server~=1.14",
     "requests~=2.32",
     "ruff~=0.9",
@@ -98,6 +99,15 @@ ignore = [
     "UP007", # use X | Y for type annotations (not compatible with Python 3.9)
 ]
 
+[tool.pytest.ini_options]
+# browser e2e tests are deselected by default so a plain `pytest test/` (used by
+# the unit-tests and sonarcloud coverage jobs, and locally) never tries to launch
+# chromium. the dedicated ci e2e job opts back in with `-m e2e`.
+markers = [
+    "e2e: browser end-to-end tests; require playwright + chromium",
+]
+addopts = "-m 'not e2e'"
+
 [tool.mypy]
 python_version = "3.9"
 strict = true
@@ -108,7 +118,7 @@ exclude = ["venv/", "build/", "dist/"]
 
 # ignores third-party packages without type stubs
 [[tool.mypy.overrides]]
-module = ["requests", "hamcrest", "testcontainers.*", "tzlocal", "flask_wtf.*", "waitress", "freezegun"]
+module = ["requests", "hamcrest", "testcontainers.*", "tzlocal", "flask_wtf.*", "waitress", "freezegun", "playwright.*", "pytest_playwright.*"]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
@@ -140,8 +150,13 @@ module = "features.mock_dashcam.server"
 warn_return_any = false
 
 [[tool.mypy.overrides]]
-module = ["test_auth", "test_routes_auth", "test_routes_health", "test_routes_ui", "test_security_headers", "test_sync_callback", "test_sync_runner", "test_routes_api_sync", "test_routes_hx_sync", "test_scheduler", "test_routes_api_settings", "test_routes_api_auth", "test_main_serve_logging", "test_routes_api_health", "test_routes_api_recordings", "test_routes_api_schedule", "test_routes_hx_dashboard", "test_sync_stop_flag", "test_scheduler_pause", "test_routes_api_dashcam", "test_dashboard_render", "test_sync_resume", "test_clean_destination", "test_logging_on_change"]
+module = ["test_auth", "test_routes_auth", "test_routes_health", "test_routes_ui", "test_security_headers", "test_sync_callback", "test_sync_runner", "test_routes_api_sync", "test_routes_hx_sync", "test_scheduler", "test_routes_api_settings", "test_routes_api_auth", "test_main_serve_logging", "test_routes_api_health", "test_routes_api_recordings", "test_routes_api_schedule", "test_routes_hx_dashboard", "test_sync_stop_flag", "test_scheduler_pause", "test_routes_api_dashcam", "test_dashboard_render", "test_sync_resume", "test_clean_destination", "test_logging_on_change", "test_dashboard_sse_handoff"]
 disallow_untyped_decorators = false
+
+[[tool.mypy.overrides]]
+module = ["test.e2e.*"]
+disallow_untyped_decorators = false
+ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = ["blackvuesync.server.routes.*", "blackvuesync.server.routes.auth", "blackvuesync.server.routes.health", "blackvuesync.server.routes.ui"]

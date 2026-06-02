@@ -1,0 +1,11 @@
+<dialog x-ref="stopDialog" class="modal" data-modal="stop-confirm"
+        aria-labelledby="stop-modal-title">
+  <h3 class="modal-title" id="stop-modal-title">Stop the running sync?</h3>
+  <p class="modal-body">The current file resumes on the next run.</p>
+  <div class="modal-actions">
+    <button type="button" class="button button-secondary"
+            @click="cancelStop">Cancel</button>
+    <button type="button" class="button button-primary"
+            @click="doStop">Stop</button>
+  </div>
+</dialog>
