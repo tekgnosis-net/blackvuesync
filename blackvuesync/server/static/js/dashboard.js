@@ -125,9 +125,8 @@ document.addEventListener("alpine:init", () => {
         let snap;
         try {
           snap = JSON.parse(ev.data);
-        } catch (err) {
+        } catch {
           /* malformed frame; the next event recovers */
-          void err;
           return;
         }
         if (snap.last_event_monotonic <= this._lastMonotonic) return; // stale
@@ -166,9 +165,8 @@ document.addEventListener("alpine:init", () => {
           method: "POST",
           headers: { "X-CSRFToken": csrfToken() },
         });
-      } catch (err) {
+      } catch {
         /* fetch failed (network error); caller guards against null return */
-        void err;
         return null;
       }
     },
