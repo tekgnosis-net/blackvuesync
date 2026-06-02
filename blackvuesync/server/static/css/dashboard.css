@@ -62,17 +62,11 @@
   color: var(--color-label-secondary);
 }
 
-/* quick-action buttons are disabled placeholders in phase 2b; phase 2c wires
-   them. the disabled style signals "coming soon" honestly. */
+/* stacks the sync-now / stop / pause action buttons vertically. */
 .sidebar-actions {
   display: flex;
   flex-direction: column;
   gap: var(--space-2);
-}
-
-.sidebar-hint {
-  font-size: var(--text-caption1);
-  color: var(--color-label-tertiary);
 }
 
 /* ---------------------------------------------------------------------------

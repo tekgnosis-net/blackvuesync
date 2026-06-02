@@ -15,7 +15,7 @@
 {% endblock %}
 
 {% block content %}
-<div class="dashboard" x-data="dashboardSync">
+<div class="dashboard" x-data="dashboardSync" data-paused="{{ 'true' if paused else 'false' }}">
   <aside class="dashboard-sidebar">
     <div class="sidebar-section sidebar-identity">
       <span class="sidebar-label">Signed in</span>
@@ -26,13 +26,13 @@
       <span class="sidebar-label">Quick actions</span>
       <div class="sidebar-actions">
         <button type="button" class="button button-primary button-full"
-                data-action="sync-now" @click="syncNow()"
-                :disabled="progress.state === 'running'">Sync now</button>
+                data-action="sync-now" @click="syncNow"
+                :disabled="isRunning">Sync now</button>
         <button type="button" class="button button-secondary button-full active-only"
-                data-action="stop" @click="confirmStop()">Stop sync</button>
+                data-action="stop" @click="confirmStop" x-ref="stopTrigger">Stop sync</button>
         <button type="button" class="button button-secondary button-full"
                 data-action="pause"
-                @click="togglePause({{ paused | tojson }})">
+                @click="togglePause">
           {{ "Resume schedule" if paused else "Pause schedule" }}
         </button>
       </div>
@@ -45,20 +45,20 @@
     <div class="card sync-status-card active-only" id="active-hero">
       <div class="card-header">
         <h3 class="card-title">Sync in progress</h3>
-        <span class="badge" :class="'badge-' + progress.state" x-text="progress.state"></span>
+        <span class="badge" :class="badgeClass" x-text="progress.state"></span>
       </div>
       <div class="card-body">
         <div class="progress-bar-container">
-          <div class="progress-bar" :style="'width: ' + (progress.percent || 0) + '%'"></div>
+          <div class="progress-bar" :style="heroBarStyle"></div>
         </div>
         <p class="sync-files">
           <span x-text="progress.files_completed"></span> /
           <span x-text="progress.files_total"></span> files
-          <span x-show="progress.files_failed > 0">
+          <span x-show="hasFailures">
             (<span x-text="progress.files_failed"></span> failed)</span>
         </p>
-        <p class="sync-current-file" x-show="progress.current_file"
-           x-text="progress.current_file ? progress.current_file.filename : ''"></p>
+        <p class="sync-current-file" x-show="hasCurrentFile"
+           x-text="currentFilename"></p>
       </div>
     </div>
 

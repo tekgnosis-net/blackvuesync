@@ -22,14 +22,46 @@ document.addEventListener("alpine:init", () => {
       files_failed: 0,
       current_file: null,
     },
+    paused: false,
     stopModalOpen: false,
     _source: null,
     _backoffMs: SSE_BACKOFF_START_MS,
     _reconnectTimer: null,
     _lastMonotonic: -1,
 
+    // --- csp-safe getters: directives may only reference a property or method ---
+
+    get isRunning() {
+      return this.progress.state === "running";
+    },
+
+    get badgeClass() {
+      return "badge-" + this.progress.state;
+    },
+
+    get heroBarStyle() {
+      return "width: " + (this.progress.percent || 0) + "%";
+    },
+
+    get hasFailures() {
+      return this.progress.files_failed > 0;
+    },
+
+    get hasCurrentFile() {
+      return Boolean(this.progress.current_file);
+    },
+
+    get currentFilename() {
+      return this.progress.current_file
+        ? this.progress.current_file.filename
+        : "";
+    },
+
     init() {
       this.progress.state = document.body.dataset.state || "idle";
+      // reads paused flag from server-rendered data attribute on the root element.
+      const root = this.$el;
+      this.paused = root.dataset.paused === "true";
       // always open the stream so externally-started syncs are also detected.
       this.openStream();
     },
@@ -54,19 +86,20 @@ document.addEventListener("alpine:init", () => {
 
     confirmStop() {
       this.stopModalOpen = true;
+      this.$nextTick(() => this.$refs.stopCancel?.focus());
     },
     cancelStop() {
       this.stopModalOpen = false;
+      this.$nextTick(() => this.$refs.stopTrigger?.focus());
     },
     async doStop() {
       this.stopModalOpen = false;
       await this.post("/api/sync/stop"); // SSE will report the terminal state
+      this.$nextTick(() => this.$refs.stopTrigger?.focus());
     },
 
-    async togglePause(currentlyPaused) {
-      const path = currentlyPaused
-        ? "/api/schedule/resume"
-        : "/api/schedule/pause";
+    async togglePause() {
+      const path = this.paused ? "/api/schedule/resume" : "/api/schedule/pause";
       const resp = await this.post(path);
       if (resp && resp.ok) {
         window.location.reload(); // reflect the new Pause/Resume label

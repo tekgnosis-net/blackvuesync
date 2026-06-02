@@ -109,4 +109,5 @@ class TestStopModal:
 
     def test_modal_confirm_calls_dostop(self, logged_in: Any) -> None:
         body = logged_in[0].get("/").data
-        assert b'@click="doStop()"' in body
+        # csp build requires bare method reference; no parens allowed.
+        assert b'@click="doStop"' in body

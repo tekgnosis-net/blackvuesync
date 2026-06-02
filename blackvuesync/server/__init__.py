@@ -98,9 +98,7 @@ def create_app(  # pylint: disable=too-many-locals
         """sets security-related HTTP response headers on every response."""
         csp = (
             "default-src 'self'; "
-            # unsafe-eval is required by alpine.js cdN build (new Function() for
-            # expression evaluation); it is constrained to scripts from 'self' only.
-            "script-src 'self' 'unsafe-inline' 'unsafe-eval'; "
+            "script-src 'self' 'unsafe-inline'; "
             "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data: blob: https://*.tile.openstreetmap.org; "
             "media-src 'self' blob:; "
