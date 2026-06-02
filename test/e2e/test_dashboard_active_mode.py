@@ -52,8 +52,9 @@ def test_stop_modal_confirm_posts_stop(live_server: Any, page: Page) -> None:
     )
 
     page.click('[data-action="stop"]')
-    expect(page.locator('[data-modal="stop-confirm"]')).to_be_visible()
+    dialog = page.locator("dialog.modal")
+    expect(dialog).to_be_visible()
 
     with page.expect_response("**/api/sync/stop") as resp_info:
-        page.click('[data-modal="stop-confirm"] .button-primary')
+        dialog.locator(".button-primary").click()
     assert resp_info.value.status in (202, 404)

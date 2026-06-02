@@ -246,24 +246,20 @@ body[data-state="complete"] .idle-only {
    stop confirmation modal
    --------------------------------------------------------------------------- */
 
-.modal-backdrop {
-  position: fixed;
-  inset: 0;
-  background-color: rgba(0, 0, 0, 0.4);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 1000;
-  padding: var(--space-4);
+dialog.modal::backdrop {
+  background: rgba(0, 0, 0, 0.4);
 }
 
-.modal {
+/* native <dialog> is display:none until opened; centering via margin:auto. */
+dialog.modal {
   background-color: var(--color-surface);
+  border: none;
   border-radius: var(--radius-lg);
   box-shadow: var(--shadow-prominent);
   padding: var(--space-6);
   max-width: 400px;
   width: 100%;
+  margin: auto;
 }
 
 .modal-title {
