@@ -10,6 +10,9 @@ pytest.importorskip("playwright.sync_api")
 
 from playwright.sync_api import Page, expect  # noqa: E402
 
+# deselected from default runs; only the dedicated ci e2e job runs `-m e2e`.
+pytestmark = pytest.mark.e2e
+
 
 def _login(page: Page, base_url: str) -> None:
     page.goto(f"{base_url}/login")

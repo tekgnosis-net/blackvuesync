@@ -67,6 +67,9 @@ repos:
     rev: v1.14.1
     hooks:
       - id: mypy
+        # test/e2e has its own conftest.py; mypy errors on the duplicate module
+        # name when run over all files. the e2e glue is browser test code.
+        exclude: ^test/e2e/
         additional_dependencies:
           - flask~=3.1
           - flask-wtf~=1.2

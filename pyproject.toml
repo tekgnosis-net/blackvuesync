@@ -99,6 +99,15 @@ ignore = [
     "UP007", # use X | Y for type annotations (not compatible with Python 3.9)
 ]
 
+[tool.pytest.ini_options]
+# browser e2e tests are deselected by default so a plain `pytest test/` (used by
+# the unit-tests and sonarcloud coverage jobs, and locally) never tries to launch
+# chromium. the dedicated ci e2e job opts back in with `-m e2e`.
+markers = [
+    "e2e: browser end-to-end tests; require playwright + chromium",
+]
+addopts = "-m 'not e2e'"
+
 [tool.mypy]
 python_version = "3.9"
 strict = true
