@@ -23,7 +23,6 @@ document.addEventListener("alpine:init", () => {
       current_file: null,
     },
     paused: false,
-    stopModalOpen: false,
     _source: null,
     _backoffMs: SSE_BACKOFF_START_MS,
     _reconnectTimer: null,
@@ -68,12 +67,13 @@ document.addEventListener("alpine:init", () => {
 
     // single writer of body[data-state]; css does the rest
     setState(state) {
-      document.body.dataset.state =
-        state === "running"
-          ? "running"
-          : state === "complete" || state === "failed"
-            ? "complete"
-            : "idle";
+      if (state === "running") {
+        document.body.dataset.state = "running";
+      } else if (state === "complete" || state === "failed") {
+        document.body.dataset.state = "complete";
+      } else {
+        document.body.dataset.state = "idle";
+      }
     },
 
     async syncNow() {
@@ -85,25 +85,35 @@ document.addEventListener("alpine:init", () => {
     },
 
     confirmStop() {
-      this.stopModalOpen = true;
-      this.$nextTick(() => this.$refs.stopCancel?.focus());
+      this.$refs.stopDialog.showModal();
     },
     cancelStop() {
-      this.stopModalOpen = false;
-      this.$nextTick(() => this.$refs.stopTrigger?.focus());
+      this.$refs.stopDialog.close();
     },
     async doStop() {
-      this.stopModalOpen = false;
+      this.$refs.stopDialog.close();
       await this.post("/api/sync/stop"); // SSE will report the terminal state
-      this.$nextTick(() => this.$refs.stopTrigger?.focus());
     },
 
     async togglePause() {
       const path = this.paused ? "/api/schedule/resume" : "/api/schedule/pause";
       const resp = await this.post(path);
-      if (resp && resp.ok) {
-        window.location.reload(); // reflect the new Pause/Resume label
+      if (resp?.ok) {
+        location.assign(location.pathname); // reflect the new Pause/Resume label
       }
+    },
+
+    // schedules the idle revert after a complete/failed linger period.
+    _revertToIdle() {
+      if (!this._source) {
+        this.setState("idle");
+        this.openStream(); // reopen to detect future syncs
+      }
+    },
+
+    // schedules a reconnect attempt after the current backoff interval.
+    _scheduleReconnect() {
+      this.openStream(); // reconnect regardless of state to detect any sync
     },
 
     openStream() {
@@ -116,6 +126,8 @@ document.addEventListener("alpine:init", () => {
         try {
           snap = JSON.parse(ev.data);
         } catch (err) {
+          /* malformed frame; the next event recovers */
+          void err;
           return;
         }
         if (snap.last_event_monotonic <= this._lastMonotonic) return; // stale
@@ -124,19 +136,15 @@ document.addEventListener("alpine:init", () => {
         this.setState(snap.state);
         if (snap.state === "complete" || snap.state === "failed") {
           this.closeStream();
-          window.setTimeout(() => {
-            if (!this._source) {
-              this.setState("idle");
-              this.openStream(); // reopen to detect future syncs
-            }
-          }, COMPLETE_LINGER_MS);
+          setTimeout(this._revertToIdle.bind(this), COMPLETE_LINGER_MS);
         }
       });
       es.onerror = () => {
         this.closeStream();
-        this._reconnectTimer = window.setTimeout(() => {
-          this.openStream(); // reconnect regardless of state to detect any sync
-        }, this._backoffMs);
+        this._reconnectTimer = setTimeout(
+          this._scheduleReconnect.bind(this),
+          this._backoffMs
+        );
         this._backoffMs = Math.min(this._backoffMs * 2, SSE_BACKOFF_MAX_MS);
       };
     },
@@ -147,7 +155,7 @@ document.addEventListener("alpine:init", () => {
         this._source = null;
       }
       if (this._reconnectTimer) {
-        window.clearTimeout(this._reconnectTimer);
+        clearTimeout(this._reconnectTimer);
         this._reconnectTimer = null;
       }
     },
@@ -159,6 +167,8 @@ document.addEventListener("alpine:init", () => {
           headers: { "X-CSRFToken": csrfToken() },
         });
       } catch (err) {
+        /* fetch failed (network error); caller guards against null return */
+        void err;
         return null;
       }
     },
@@ -169,9 +179,8 @@ document.addEventListener("alpine:init", () => {
 // redirects to /login; htmx would otherwise swap the login page into a card.
 document.body.addEventListener("htmx:beforeSwap", (event) => {
   const xhr = event.detail.xhr;
-  if (xhr && xhr.responseURL && xhr.responseURL.indexOf("/login") !== -1) {
+  if (xhr?.responseURL?.includes("/login")) {
     event.detail.shouldSwap = false;
-    window.location =
-      "/login?next=" + encodeURIComponent(window.location.pathname);
+    location.assign("/login?next=" + encodeURIComponent(location.pathname));
   }
 });
