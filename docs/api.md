@@ -519,6 +519,17 @@ the schedule was already running.
 
 ---
 
+## Dashboard Controls (Phase 2C)
+
+The dashboard UI added in Phase 2C drives Sync-now, Stop (modal-confirmed), and
+Pause/Resume directly against the existing `/api/sync/*` and `/api/schedule/*`
+endpoints listed in this document. No new endpoints were added in 2C. The
+`dashboard.js` Alpine component opens an SSE subscription to
+`/api/sync/progress/stream` on page load and reflects `SyncProgress.state` onto
+`body[data-state]`; CSS drives the active/idle layout swap.
+
+---
+
 ## Sync API Endpoints (additions)
 
 ### `POST /api/sync/stop`
