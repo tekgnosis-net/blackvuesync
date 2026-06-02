@@ -15,7 +15,7 @@
 {% endblock %}
 
 {% block content %}
-<div class="dashboard">
+<div class="dashboard" x-data="dashboardSync">
   <aside class="dashboard-sidebar">
     <div class="sidebar-section sidebar-identity">
       <span class="sidebar-label">Signed in</span>
@@ -25,24 +25,57 @@
     <div class="sidebar-section">
       <span class="sidebar-label">Quick actions</span>
       <div class="sidebar-actions">
-        <button type="button" class="button button-secondary button-full" disabled>Sync now</button>
-        <button type="button" class="button button-secondary button-full" disabled>Pause schedule</button>
+        <button type="button" class="button button-primary button-full"
+                data-action="sync-now" @click="syncNow()"
+                :disabled="progress.state === 'running'">Sync now</button>
+        <button type="button" class="button button-secondary button-full active-only"
+                data-action="stop" @click="confirmStop()">Stop sync</button>
+        <button type="button" class="button button-secondary button-full"
+                data-action="pause"
+                @click="togglePause({{ paused | tojson }})">
+          {{ "Resume schedule" if paused else "Pause schedule" }}
+        </button>
       </div>
-      <span class="sidebar-hint">Live controls arrive in the next update.</span>
     </div>
   </aside>
 
   <div class="dashboard-grid">
-    {# local cards: pre-rendered populated in the route (each with its own
-       isolated context, so the shared `available` key cannot collide across
-       cards), injected here as already-escaped html. they then self-poll. #}
-    {{ last_run_html | safe }}
-    {{ next_scheduled_html | safe }}
-    {{ storage_html | safe }}
-    {{ recent_activity_html | safe }}
-    {# network cards: shells; htmx loads them after the page paints #}
-    {% include "_partials/dashcam_card.html" %}
-    {% include "_partials/dashcam_info_card.html" %}
+    {# active-mode hero: alpine-bound, reuses the sync-status-card look. visible
+       only when body[data-state="running"|"complete"] via css. #}
+    <div class="active-only" style="display: contents">
+      <div class="card sync-status-card" id="active-hero">
+        <div class="card-header">
+          <h3 class="card-title">Sync in progress</h3>
+          <span class="badge" :class="'badge-' + progress.state" x-text="progress.state"></span>
+        </div>
+        <div class="card-body">
+          <div class="progress-bar-container">
+            <div class="progress-bar" :style="'width: ' + (progress.percent || 0) + '%'"></div>
+          </div>
+          <p class="sync-files">
+            <span x-text="progress.files_completed"></span> /
+            <span x-text="progress.files_total"></span> files
+            <span x-show="progress.files_failed > 0">
+              (<span x-text="progress.files_failed"></span> failed)</span>
+          </p>
+          <p class="sync-current-file" x-show="progress.current_file"
+             x-text="progress.current_file ? progress.current_file.filename : ''"></p>
+        </div>
+      </div>
+    </div>
+
+    {# idle cards: server-rendered populated, then self-poll. hidden in active
+       mode via body[data-state] css. #}
+    <div class="idle-only" style="display: contents">
+      {{ last_run_html | safe }}
+      {{ next_scheduled_html | safe }}
+      {{ storage_html | safe }}
+      {{ recent_activity_html | safe }}
+      {% include "_partials/dashcam_card.html" %}
+      {% include "_partials/dashcam_info_card.html" %}
+    </div>
   </div>
+
+  {% include "_partials/stop_confirm_modal.html" %}
 </div>
 {% endblock %}

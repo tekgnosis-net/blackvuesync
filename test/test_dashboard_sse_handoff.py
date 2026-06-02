@@ -65,3 +65,47 @@ class TestInitialState:
         client, _app, _store = logged_in
         resp = client.get("/")
         assert b"js/dashboard.js" in resp.data
+
+
+class TestControls:
+    def test_sync_now_and_stop_buttons_present(self, logged_in: Any) -> None:
+        client, _app, _store = logged_in
+        body = client.get("/").data
+        assert b'data-action="sync-now"' in body
+        assert b'data-action="stop"' in body
+
+    def test_no_disabled_placeholder_controls(self, logged_in: Any) -> None:
+        client, _app, _store = logged_in
+        body = client.get("/").data
+        assert b"Live controls arrive in the next update" not in body
+
+    def test_pause_button_reflects_not_paused(self, logged_in: Any) -> None:
+        client, _app, _store = logged_in
+        body = client.get("/").data.decode()
+        assert "Pause schedule" in body  # not paused -> offers Pause
+
+    def test_pause_button_reflects_paused(self, logged_in: Any) -> None:
+        client, _app, store = logged_in
+        store.update(
+            lambda s: dataclasses.replace(
+                s, schedule=dataclasses.replace(s.schedule, paused=True)
+            )
+        )
+        body = client.get("/").data.decode()
+        assert "Resume schedule" in body  # paused -> offers Resume
+
+    def test_active_hero_region_present(self, logged_in: Any) -> None:
+        client, _app, _store = logged_in
+        body = client.get("/").data
+        assert b'class="active-only' in body
+
+
+class TestStopModal:
+    def test_modal_markup_present(self, logged_in: Any) -> None:
+        body = logged_in[0].get("/").data
+        assert b'data-modal="stop-confirm"' in body
+        assert b"Stop the running sync?" in body
+
+    def test_modal_confirm_calls_dostop(self, logged_in: Any) -> None:
+        body = logged_in[0].get("/").data
+        assert b'@click="doStop()"' in body
