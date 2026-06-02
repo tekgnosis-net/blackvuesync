@@ -97,7 +97,8 @@ class TestControls:
     def test_active_hero_region_present(self, logged_in: Any) -> None:
         client, _app, _store = logged_in
         body = client.get("/").data
-        assert b'class="active-only' in body
+        assert b'id="active-hero"' in body
+        assert b"active-only" in body  # hero + stop button carry the toggle class
 
 
 class TestStopModal:

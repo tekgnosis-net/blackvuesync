@@ -197,6 +197,14 @@ body[data-state="complete"] .active-only {
   display: block;
 }
 
+/* the idle-only wrapper is transparent (display: contents) so its card children
+   participate directly in the dashboard grid; the running/complete rule below
+   hides the whole subtree. defined in css -- not inline -- so the data-state
+   override can win. */
+.idle-only {
+  display: contents;
+}
+
 body[data-state="running"] .idle-only,
 body[data-state="complete"] .idle-only {
   display: none;
