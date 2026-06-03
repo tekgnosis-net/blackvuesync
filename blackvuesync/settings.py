@@ -331,6 +331,12 @@ _TUPLE_FIELDS: dict[str, set[str]] = {
     "auth": {"trusted_proxies"},
 }
 
+# fields that must never be sent to clients; the redaction sentinel "***" is
+# returned instead and stripped again on inbound patches.
+_REDACTED_FIELDS: dict[str, set[str]] = {
+    "auth": {"password_hash", "session_secret"},
+}
+
 
 def _section_to_dict(section: object) -> dict[str, Any]:
     """converts a frozen section dataclass to a JSON-serializable dict."""
