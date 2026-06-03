@@ -1,0 +1,17 @@
+<div class="settings-field">
+  <span class="field-label">Password</span>
+  <div class="auth-secret-row">
+    <span class="auth-secret-state">Password: set</span>
+    <button type="button" class="button button-secondary button-sm"
+            data-action="change-password" @click="openPasswordDialog">Change password</button>
+  </div>
+</div>
+<div class="settings-field">
+  <span class="field-label">Session secret</span>
+  <div class="auth-secret-row">
+    <span class="auth-secret-state">Session secret: set</span>
+    <button type="button" class="button button-secondary button-sm"
+            data-action="rotate-sessions" @click="rotateSessions">Rotate sessions</button>
+  </div>
+  <p class="field-help">Rotating invalidates existing sessions on the next container restart.</p>
+</div>

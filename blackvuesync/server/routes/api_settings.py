@@ -11,6 +11,7 @@ from flask import Blueprint, Response, current_app
 from blackvuesync.server.auth import login_required
 from blackvuesync.server.routes._helpers import require_dict_body
 from blackvuesync.settings import (
+    _REDACTED_FIELDS,
     _SECTION_FIELDS,
     _TUPLE_FIELDS,
     Settings,
@@ -21,12 +22,8 @@ api_settings_bp = Blueprint("api_settings_bp", __name__, url_prefix="/api/settin
 
 _MIME_JSON = "application/json"
 
-# fields whose values must never be sent to the client; the literal "***"
-# sentinel is returned instead. the same sentinel is also the signal on
-# PATCH that means "leave this field unchanged".
-_REDACTED_FIELDS: dict[str, set[str]] = {
-    "auth": {"password_hash", "session_secret"},
-}
+# _REDACTED_FIELDS is defined in settings.py and imported above; the literal
+# "***" sentinel is returned for those fields and stripped on inbound patches.
 
 _REDACTED_SENTINEL = "***"
 

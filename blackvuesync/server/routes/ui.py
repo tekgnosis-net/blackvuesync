@@ -1,4 +1,4 @@
-"""placeholder ui routes: /, /settings, /logs, /stats, /viewer."""
+"""ui routes: dashboard, settings, and placeholder pages."""
 
 from __future__ import annotations
 
@@ -10,7 +10,9 @@ from blackvuesync import __version__
 from blackvuesync.server.auth import login_required
 from blackvuesync.server.routes.api_health import _compute_storage
 from blackvuesync.server.routes.api_recordings import _DEFAULT_LIMIT, _compute_recent
+from blackvuesync.server.routes.api_settings import _settings_to_dict
 from blackvuesync.server.routes.hx_dashboard import _next_human
+from blackvuesync.server.settings_form import build_sections
 
 bp = Blueprint("ui_bp", __name__)
 
@@ -71,11 +73,14 @@ def dashboard() -> str:
 @bp.route("/settings", methods=["GET"])
 @login_required
 def settings() -> str:
-    """renders the settings placeholder page."""
+    """renders the settings page (sidebar sections + per-section forms)."""
+    store = current_app.settings_store  # type: ignore[attr-defined]
+    settings_dict = _settings_to_dict(store.get())  # redacted, per-section _tier
     return render_template(
-        "_placeholders/settings.html",
+        "settings.html",
         version=__version__,
         page="settings",
+        sections=build_sections(settings_dict),
     )
 
 

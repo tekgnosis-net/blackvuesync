@@ -1,0 +1,42 @@
+<div class="settings-field">
+  <label for="f-{{ s.name }}-{{ f.name }}">{{ f.label }}</label>
+
+  {% if f.widget == "select" %}
+    <select id="f-{{ s.name }}-{{ f.name }}" class="form-input"
+            data-field="{{ f.name }}" data-type="{{ f.data_type }}"
+            {% if s.name == 'auth' and f.name == 'mode' %}data-original="{{ f.value }}"{% endif %}>
+      {% for opt in f.options %}
+        <option value="{{ opt }}" {% if f.value == opt %}selected{% endif %}>{{ opt }}</option>
+      {% endfor %}
+    </select>
+
+  {% elif f.widget == "toggle" %}
+    <input type="checkbox" id="f-{{ s.name }}-{{ f.name }}"
+           data-field="{{ f.name }}" data-type="{{ f.data_type }}"
+           {% if f.value %}checked{% endif %}>
+
+  {% elif f.widget == "checkboxes" %}
+    <div class="field-checkboxes" data-field="{{ f.name }}" data-type="{{ f.data_type }}">
+      {% for opt in f.options %}
+        <label class="field-checkbox">
+          <input type="checkbox" value="{{ opt }}"
+                 {% if opt in f.value %}checked{% endif %}> {{ opt }}
+        </label>
+      {% endfor %}
+    </div>
+
+  {% elif f.widget == "lines" %}
+    <textarea id="f-{{ s.name }}-{{ f.name }}" class="form-input" rows="3"
+              data-field="{{ f.name }}" data-type="{{ f.data_type }}">{{ f.value }}</textarea>
+
+  {% elif f.widget == "number" %}
+    <input type="number" step="any" id="f-{{ s.name }}-{{ f.name }}" class="form-input"
+           data-field="{{ f.name }}" data-type="{{ f.data_type }}" value="{{ f.value }}">
+
+  {% else %}
+    <input type="text" id="f-{{ s.name }}-{{ f.name }}" class="form-input"
+           data-field="{{ f.name }}" data-type="{{ f.data_type }}" value="{{ f.value }}">
+  {% endif %}
+
+  {% if f.help %}<p class="field-help">{{ f.help }}</p>{% endif %}
+</div>
