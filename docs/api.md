@@ -519,6 +519,17 @@ the schedule was already running.
 
 ---
 
+## Settings UI (Sub-Project #3)
+
+The `/settings` page added in Sub-Project #3 drives the existing
+`GET /api/settings` and `PATCH /api/settings/<section>` endpoints for
+all nine sections (connection, schedule, sync, retention, logging,
+metrics, web, auth, system). It also drives `POST /api/auth/password`
+(change-password dialog) and `DELETE /api/auth/sessions` (rotate
+sessions button). No new API endpoints were added in Sub-Project #3.
+
+---
+
 ## Dashboard Controls (Phase 2C)
 
 The dashboard UI added in Phase 2C drives Sync-now, Stop (modal-confirmed), and
