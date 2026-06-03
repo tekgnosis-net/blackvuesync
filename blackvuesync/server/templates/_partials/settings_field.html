@@ -3,7 +3,8 @@
 
   {% if f.widget == "select" %}
     <select id="f-{{ s.name }}-{{ f.name }}" class="form-input"
-            data-field="{{ f.name }}" data-type="{{ f.data_type }}">
+            data-field="{{ f.name }}" data-type="{{ f.data_type }}"
+            {% if s.name == 'auth' and f.name == 'mode' %}data-original="{{ f.value }}"{% endif %}>
       {% for opt in f.options %}
         <option value="{{ opt }}" {% if f.value == opt %}selected{% endif %}>{{ opt }}</option>
       {% endfor %}
