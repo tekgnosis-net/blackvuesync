@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import dataclasses
 from pathlib import Path
 
 from flask import Blueprint, current_app, render_template
 
 from blackvuesync import __version__
 from blackvuesync.server.auth import login_required
+from blackvuesync.server.log_buffer import verbosity_token
 from blackvuesync.server.routes.api_health import _compute_storage
 from blackvuesync.server.routes.api_recordings import _DEFAULT_LIMIT, _compute_recent
 from blackvuesync.server.routes.api_settings import _settings_to_dict
@@ -87,11 +89,17 @@ def settings() -> str:
 @bp.route("/logs", methods=["GET"])
 @login_required
 def logs() -> str:
-    """renders the log viewer placeholder page."""
+    """renders the live log viewer, server-painting the current buffer snapshot."""
+    buf = current_app.log_buffer  # type: ignore[attr-defined]
+    logging_settings = current_app.settings_store.get().logging  # type: ignore[attr-defined]
     return render_template(
-        "_placeholders/logs.html",
+        "logs.html",
         version=__version__,
         page="logs",
+        lines=[dataclasses.asdict(ln) for ln in buf.snapshot()],
+        log_file_path=current_app.log_file_path or "",  # type: ignore[attr-defined]
+        capacity=buf.capacity,
+        verbosity=verbosity_token(logging_settings),
     )
 
 
