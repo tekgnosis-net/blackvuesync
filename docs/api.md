@@ -539,7 +539,7 @@ Returns the current in-memory log buffer snapshot as JSON.
   "lines": [
     {
       "seq": 1,
-      "ts": "2026-01-01T12:00:00.000000",
+      "ts": "2026-01-01T12:00:00.000Z",
       "level": "INFO",
       "level_no": 20,
       "logger": "blackvuesync",
@@ -552,7 +552,7 @@ Returns the current in-memory log buffer snapshot as JSON.
 }
 ```
 
-`file_path` is `null` when no rotating file handler is active. `verbosity` reflects
+`file_path` is `""` (empty string) when no rotating file handler is active. `verbosity` reflects
 the current `logging.verbose` / `logging.quiet` setting (`"verbose"`, `"normal"`,
 or `"quiet"`).
 
