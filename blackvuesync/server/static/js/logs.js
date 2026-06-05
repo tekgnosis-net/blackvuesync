@@ -66,7 +66,7 @@ document.addEventListener("alpine:init", () => {
     setLevel(ev) {
       const level = ev.currentTarget.dataset.level;
       this.minLevelNo = LEVEL_ORDER[level] || 0;
-      this.$root.querySelectorAll("[data-level]").forEach((btn) => {
+      this.$root.querySelectorAll(".logs-level-btn").forEach((btn) => {
         btn.classList.toggle("active", btn.dataset.level === level);
       });
       this.applyFilters();
