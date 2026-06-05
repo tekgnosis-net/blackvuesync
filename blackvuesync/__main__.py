@@ -9,7 +9,9 @@ import os
 import socket
 import sys
 import time
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import blackvuesync.sync as _sync
 from blackvuesync import __version__
@@ -41,6 +43,9 @@ from blackvuesync.sync import (
     sync,
     unlock,
 )
+
+if TYPE_CHECKING:
+    from blackvuesync.server.log_buffer import LogBuffer
 
 # module-level loggers
 logger = logging.getLogger()
@@ -290,6 +295,54 @@ def _register_logging_reload(store: SettingsStore) -> None:
     store.on_change(_on_change)
 
 
+def _build_file_handler(logging_settings: Any, log_dir: Path) -> RotatingFileHandler:
+    """creates the rotating file handler under log_dir, making the dir if absent.
+
+    serve mode only; the file survives restarts and is browsed on the host.
+    """
+    log_dir.mkdir(parents=True, exist_ok=True)
+    with contextlib.suppress(OSError):
+        log_dir.chmod(0o700)
+    return RotatingFileHandler(
+        str(log_dir / "blackvuesync.log"),
+        maxBytes=logging_settings.file_max_bytes,
+        backupCount=logging_settings.file_backup_count,
+        encoding="utf-8",
+    )
+
+
+def _reconfigure_serve_logging(
+    old: Settings,
+    new: Settings,
+    log_buffer: LogBuffer,
+    file_handler_box: list[RotatingFileHandler],
+    log_dir: Path,
+) -> None:
+    """re-applies serve-only logging handlers when the logging section changes.
+
+    resizes the ring buffer and rebuilds the rotating file handler in place,
+    then re-applies format and level to every handler (including the new one).
+    file_handler_box is a single-element holder so the swapped handler is
+    visible to the caller across invocations.
+    """
+    if new.logging == old.logging:
+        return
+    if new.logging.ring_buffer_capacity != old.logging.ring_buffer_capacity:
+        log_buffer.set_capacity(new.logging.ring_buffer_capacity)
+    if (
+        new.logging.file_max_bytes != old.logging.file_max_bytes
+        or new.logging.file_backup_count != old.logging.file_backup_count
+    ):
+        root = logging.getLogger()
+        old_handler = file_handler_box[0]
+        root.removeHandler(old_handler)
+        old_handler.close()
+        new_handler = _build_file_handler(new.logging, log_dir)
+        root.addHandler(new_handler)
+        file_handler_box[0] = new_handler
+    _apply_logging_settings(new.logging)
+
+
 def cmd_sync(args: argparse.Namespace) -> int:
     """runs the sync workflow and returns the exit code."""
     # pylint: disable=too-many-branches,too-many-statements
@@ -440,7 +493,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
     return exit_code
 
 
-def cmd_serve(args: argparse.Namespace) -> int:
+def cmd_serve(args: argparse.Namespace) -> int:  # pylint: disable=too-many-locals
     """starts the web server and APScheduler; blocks until interrupted."""
     # configures logging using the settings.logging section once we have
     # loaded the settings store below. for now configure with defaults so
@@ -454,6 +507,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     import waitress
 
     from blackvuesync.server import create_app
+    from blackvuesync.server.log_buffer import LogBuffer
     from blackvuesync.server.progress import ProgressPublisher
     from blackvuesync.server.scheduler import init_scheduler
 
@@ -470,12 +524,36 @@ def cmd_serve(args: argparse.Namespace) -> int:
     # setting (operators need to see them in docker logs); quiet=true still
     # suppresses everything below ERROR.
     _apply_logging_settings(settings.logging)
+
+    # serve-only durable + live log sinks (sync.py stays stdlib-only / no file).
+    root_logger = logging.getLogger()
+    log_buffer = LogBuffer(capacity=settings.logging.ring_buffer_capacity)
+    root_logger.addHandler(log_buffer)
+    log_dir = config_path.parent / "logs"
+    file_handler = _build_file_handler(settings.logging, log_dir)
+    root_logger.addHandler(file_handler)
+    log_file_path = str(log_dir / "blackvuesync.log")
+    # re-applies the formatter to the two handlers just attached.
+    configure_logging(settings.logging.format)
+
     publisher = ProgressPublisher()
-    app = create_app(store, progress_publisher=publisher)
+    app = create_app(
+        store,
+        progress_publisher=publisher,
+        log_buffer=log_buffer,
+        log_file_path=log_file_path,
+    )
     port = args.port if args.port is not None else settings.web.port
 
     scheduler = init_scheduler(store, publisher)
     _register_logging_reload(store)
+    # second listener: resizes the ring buffer / rebuilds the file handler live.
+    file_handler_box = [file_handler]
+    store.on_change(
+        lambda old, new: _reconfigure_serve_logging(
+            old, new, log_buffer, file_handler_box, log_dir
+        )
+    )
     logger.info(
         "scheduler started: %r (%s)",
         settings.schedule.cron_expression,

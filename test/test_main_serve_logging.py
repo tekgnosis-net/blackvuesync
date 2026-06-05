@@ -54,9 +54,10 @@ def test_cmd_serve_invokes_logging_scheduler_and_waitress(
 ) -> None:
     """cmd_serve wires up the four side effects in order."""
     mock_cfg, mock_set, mock_init, mock_waitress = _run_cmd_serve(settings_path)
-    # configure_logging is called twice: bootstrap default, then re-applied
-    # from settings.logging.format after the store loads.
-    assert mock_cfg.call_count == 2
+    # configure_logging is called three times: bootstrap default,
+    # re-applied from settings.logging.format via _apply_logging_settings,
+    # then once more to propagate the formatter to the serve-only handlers.
+    assert mock_cfg.call_count == 3
     # set_logging_levels is called twice: bootstrap (verbose=1) then the
     # settings-driven level.
     assert mock_set.call_count == 2

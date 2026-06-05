@@ -119,3 +119,75 @@ def test_subscribe_heartbeat_yields_empty_list_quickly() -> None:
     assert batch == []
     assert time.monotonic() - start < 1.0
     gen.close()
+
+
+def test_build_file_handler_creates_logs_dir(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    from blackvuesync.__main__ import _build_file_handler
+
+    class _L:
+        format = "text"
+        file_max_bytes = 1024
+        file_backup_count = 2
+
+    log_dir = tmp_path / "logs"
+    handler = _build_file_handler(_L(), log_dir)
+    try:
+        assert log_dir.is_dir()
+        assert handler.baseFilename == str(log_dir / "blackvuesync.log")
+        assert handler.maxBytes == 1024
+        assert handler.backupCount == 2
+    finally:
+        handler.close()
+
+
+def test_reconfigure_serve_logging_resizes_buffer(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    import dataclasses as _dc
+    import os as _os
+    from unittest.mock import patch as _patch
+
+    from blackvuesync.__main__ import _build_file_handler, _reconfigure_serve_logging
+    from blackvuesync.settings import SettingsStore
+
+    with _patch.dict(_os.environ, {"ADDRESS": "192.168.0.1"}, clear=False):
+        store = SettingsStore(tmp_path / "settings.json")
+    old = store.get()
+    new = _dc.replace(old, logging=_dc.replace(old.logging, ring_buffer_capacity=7))
+    buf = LogBuffer(capacity=1000)
+    log_dir = tmp_path / "logs"
+    box = [_build_file_handler(old.logging, log_dir)]
+    try:
+        _reconfigure_serve_logging(old, new, buf, box, log_dir)
+        assert buf.capacity == 7
+    finally:
+        box[0].close()
+
+
+def test_reconfigure_serve_logging_swaps_file_handler(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    import dataclasses as _dc
+    import logging as _logging
+    import os as _os
+    from unittest.mock import patch as _patch
+
+    from blackvuesync.__main__ import _build_file_handler, _reconfigure_serve_logging
+    from blackvuesync.settings import SettingsStore
+
+    with _patch.dict(_os.environ, {"ADDRESS": "192.168.0.1"}, clear=False):
+        store = SettingsStore(tmp_path / "settings.json")
+    old = store.get()
+    new = _dc.replace(old, logging=_dc.replace(old.logging, file_backup_count=9))
+    buf = LogBuffer(capacity=10)
+    log_dir = tmp_path / "logs"
+    first = _build_file_handler(old.logging, log_dir)
+    box = [first]
+    root = _logging.getLogger()
+    root.addHandler(first)
+    try:
+        _reconfigure_serve_logging(old, new, buf, box, log_dir)
+        assert box[0] is not first
+        assert box[0].backupCount == 9
+        assert first not in root.handlers
+        assert box[0] in root.handlers
+    finally:
+        root.removeHandler(box[0])
+        box[0].close()
+        first.close()
