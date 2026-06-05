@@ -9,7 +9,7 @@ from collections.abc import Iterator
 from flask import Blueprint, Response, current_app, stream_with_context
 
 from blackvuesync.server.auth import login_required
-from blackvuesync.server.log_buffer import LogBuffer, verbosity_token
+from blackvuesync.server.log_buffer import LogBuffer, LogLine, verbosity_token
 
 api_logs_bp = Blueprint("api_logs_bp", __name__, url_prefix="/api/logs")
 
@@ -26,6 +26,12 @@ def _current_verbosity() -> str:
     """returns the current verbosity token from the logging settings."""
     store = current_app.settings_store  # type: ignore[attr-defined]
     return verbosity_token(store.get().logging)
+
+
+def _logs_frame(lines: list[LogLine]) -> bytes:
+    """serializes a batch of log lines as one SSE 'logs' event frame."""
+    payload = json.dumps({"lines": [dataclasses.asdict(ln) for ln in lines]})
+    return f"event: logs\ndata: {payload}\n\n".encode()
 
 
 @api_logs_bp.route("/recent", methods=["GET"])
@@ -61,16 +67,12 @@ def stream() -> Response:
         batches = buf.subscribe()
         initial = buf.snapshot()
         if initial:
-            payload = json.dumps({"lines": [dataclasses.asdict(ln) for ln in initial]})
-            yield f"event: logs\ndata: {payload}\n\n".encode()
+            yield _logs_frame(initial)
         for batch in batches:
             if not batch:
                 yield b": keepalive\n\n"
             else:
-                payload = json.dumps(
-                    {"lines": [dataclasses.asdict(ln) for ln in batch]}
-                )
-                yield f"event: logs\ndata: {payload}\n\n".encode()
+                yield _logs_frame(batch)
 
     resp = Response(stream_with_context(_sse_events()), mimetype="text/event-stream")
     resp.headers["Cache-Control"] = "no-store"
