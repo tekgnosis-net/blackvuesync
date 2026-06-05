@@ -6,10 +6,11 @@ import dataclasses
 import json
 from collections.abc import Iterator
 
-from flask import Blueprint, Response, current_app, stream_with_context
+from flask import Blueprint, Response, current_app
 
 from blackvuesync.server.auth import login_required
 from blackvuesync.server.log_buffer import LogBuffer, LogLine, verbosity_token
+from blackvuesync.server.sse import sse_response
 
 api_logs_bp = Blueprint("api_logs_bp", __name__, url_prefix="/api/logs")
 
@@ -74,11 +75,7 @@ def stream() -> Response:
             else:
                 yield _logs_frame(batch)
 
-    resp = Response(stream_with_context(_sse_events()), mimetype="text/event-stream")
-    resp.headers["Cache-Control"] = "no-store"
-    resp.headers["X-Accel-Buffering"] = "no"
-    resp.headers["Transfer-Encoding"] = "chunked"
-    return resp
+    return sse_response(_sse_events())
 
 
 __all__ = ["api_logs_bp"]

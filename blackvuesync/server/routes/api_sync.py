@@ -6,10 +6,11 @@ import dataclasses
 import json
 from collections.abc import Iterator
 
-from flask import Blueprint, Response, current_app, stream_with_context
+from flask import Blueprint, Response, current_app
 
 from blackvuesync.server.auth import login_required
 from blackvuesync.server.progress import FileProgress, ProgressPublisher, SyncProgress
+from blackvuesync.server.sse import sse_response
 from blackvuesync.server.sync_runner import trigger_sync
 
 # manual smoke test:
@@ -85,11 +86,7 @@ def progress_stream() -> Response:
                 payload = json.dumps(snap_dict, default=str)
                 yield f"event: progress\ndata: {payload}\n\n".encode()
 
-    resp = Response(stream_with_context(_sse_events()), mimetype="text/event-stream")
-    resp.headers["Cache-Control"] = "no-store"
-    resp.headers["X-Accel-Buffering"] = "no"
-    resp.headers["Transfer-Encoding"] = "chunked"
-    return resp
+    return sse_response(_sse_events())
 
 
 @api_sync_bp.route("/now", methods=["POST"])
