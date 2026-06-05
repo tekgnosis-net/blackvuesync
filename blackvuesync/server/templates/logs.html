@@ -19,10 +19,10 @@
     <input type="search" class="logs-search" placeholder="Filter visible lines"
            aria-label="Filter log lines" @input="onSearch">
     <div class="logs-verbosity" role="group" aria-label="Capture verbosity">
-      <button type="button" class="logs-verb-btn" data-verbosity="quiet" @click="setVerbosity">Quiet</button>
-      <button type="button" class="logs-verb-btn" data-verbosity="normal" @click="setVerbosity">Normal</button>
-      <button type="button" class="logs-verb-btn" data-verbosity="verbose" @click="setVerbosity">Verbose</button>
-      <button type="button" class="logs-verb-btn" data-verbosity="debug" @click="setVerbosity">Debug</button>
+      <button type="button" class="logs-verb-btn{% if verbosity == 'quiet' %} active{% endif %}" data-verbosity="quiet" @click="setVerbosity">Quiet</button>
+      <button type="button" class="logs-verb-btn{% if verbosity == 'normal' %} active{% endif %}" data-verbosity="normal" @click="setVerbosity">Normal</button>
+      <button type="button" class="logs-verb-btn{% if verbosity == 'verbose' %} active{% endif %}" data-verbosity="verbose" @click="setVerbosity">Verbose</button>
+      <button type="button" class="logs-verb-btn{% if verbosity == 'debug' %} active{% endif %}" data-verbosity="debug" @click="setVerbosity">Debug</button>
     </div>
     <button type="button" class="button button-secondary button-sm" @click="togglePause" x-text="pauseLabel"></button>
     <button type="button" class="button button-secondary button-sm" @click="clearView">Clear</button>

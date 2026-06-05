@@ -91,7 +91,8 @@ def settings() -> str:
 def logs() -> str:
     """renders the live log viewer, server-painting the current buffer snapshot."""
     buf = current_app.log_buffer  # type: ignore[attr-defined]
-    logging_settings = current_app.settings_store.get().logging  # type: ignore[attr-defined]
+    store = current_app.settings_store  # type: ignore[attr-defined]
+    logging_settings = store.get().logging
     return render_template(
         "logs.html",
         version=__version__,
