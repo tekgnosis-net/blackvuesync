@@ -519,6 +519,81 @@ the schedule was already running.
 
 ---
 
+## Logs API Endpoints
+
+All endpoints below require authentication (subject to `auth.mode`).
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/api/logs/recent` | JSON snapshot: `{lines, file_path, capacity, verbosity}` |
+| `GET` | `/api/logs/stream` | SSE stream of new log lines (`event: logs`) |
+
+### `GET /api/logs/recent`
+
+Returns the current in-memory log buffer snapshot as JSON.
+
+**Response (200 OK):**
+
+```json
+{
+  "lines": [
+    {
+      "seq": 1,
+      "ts": "2026-01-01T12:00:00.000000",
+      "level": "INFO",
+      "level_no": 20,
+      "logger": "blackvuesync",
+      "message": "sync started"
+    }
+  ],
+  "file_path": "/recordings/blackvuesync.log",
+  "capacity": 500,
+  "verbosity": "normal"
+}
+```
+
+`file_path` is `null` when no rotating file handler is active. `verbosity` reflects
+the current `logging.verbose` / `logging.quiet` setting (`"verbose"`, `"normal"`,
+or `"quiet"`).
+
+### `GET /api/logs/stream`
+
+Server-Sent Events (SSE) stream of new log lines.
+
+**Response headers:**
+
+```http
+Content-Type: text/event-stream
+Cache-Control: no-store
+X-Accel-Buffering: no
+```
+
+**Event format:**
+
+```text
+event: logs
+data: {"lines": [...]}
+
+```
+
+The first frame contains the full current buffer snapshot (same lines as
+`/api/logs/recent`). Subsequent frames contain only the new lines since the
+previous emit. When no new lines arrive for 30 seconds a keepalive comment
+is emitted:
+
+```text
+: keepalive
+
+```
+
+Each line object carries the same fields as in `/api/logs/recent`:
+`{seq, ts, level, level_no, logger, message}`.
+
+The viewer changes capture verbosity through the existing
+`PATCH /api/settings/logging`; there is no dedicated verbosity endpoint.
+
+---
+
 ## Settings UI (Sub-Project #3)
 
 The `/settings` page added in Sub-Project #3 drives the existing
