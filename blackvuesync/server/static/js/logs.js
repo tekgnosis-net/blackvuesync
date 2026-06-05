@@ -43,7 +43,7 @@ document.addEventListener("alpine:init", () => {
 
     init() {
       this.verbosity = this.$el.dataset.verbosity || "normal";
-      const cap = parseInt(this.$el.dataset.capacity || "1000", 10);
+      const cap = Number.parseInt(this.$el.dataset.capacity || "1000", 10);
       this.capacity = Number.isFinite(cap) && cap > 0 ? cap : 1000;
       this._pane = this.$el.querySelector("[data-pane]");
       this._lastSeq = this.maxRenderedSeq();
@@ -56,7 +56,7 @@ document.addEventListener("alpine:init", () => {
     maxRenderedSeq() {
       let max = 0;
       this._pane.querySelectorAll("[data-seq]").forEach((row) => {
-        const seq = parseInt(row.dataset.seq || "0", 10);
+        const seq = Number.parseInt(row.dataset.seq || "0", 10);
         if (Number.isFinite(seq) && seq > max) max = seq;
       });
       return max;
@@ -83,7 +83,7 @@ document.addEventListener("alpine:init", () => {
     },
 
     clearView() {
-      while (this._pane.firstChild) this._pane.removeChild(this._pane.firstChild);
+      while (this._pane.firstChild) this._pane.firstChild.remove();
       this.updateEmpty();
     },
 
@@ -141,7 +141,7 @@ document.addEventListener("alpine:init", () => {
     },
 
     applyRowVisibility(row) {
-      const levelNo = parseInt(row.dataset.levelNo || "0", 10);
+      const levelNo = Number.parseInt(row.dataset.levelNo || "0", 10);
       const text = row.textContent.toLowerCase();
       const visible =
         levelNo >= this.minLevelNo && (!this.query || text.includes(this.query));
@@ -157,7 +157,7 @@ document.addEventListener("alpine:init", () => {
     trimToCapacity() {
       let extra = this._pane.childElementCount - this.capacity;
       while (extra-- > 0 && this._pane.firstChild) {
-        this._pane.removeChild(this._pane.firstChild);
+        this._pane.firstChild.remove();
       }
     },
 

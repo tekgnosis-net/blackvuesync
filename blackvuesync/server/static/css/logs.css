@@ -16,6 +16,10 @@
 .logs-verbosity {
   display: inline-flex;
   gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  min-width: 0;
 }
 
 .logs-level-btn,
