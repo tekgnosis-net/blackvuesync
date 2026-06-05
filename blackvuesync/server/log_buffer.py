@@ -115,20 +115,25 @@ class LogBuffer(logging.Handler):
             self._lines = deque(self._lines, maxlen=capacity)
 
     def subscribe(self) -> Generator[list[LogLine], None, None]:
-        """yields batches of newly-emitted lines; an empty list is a heartbeat.
+        """returns an iterator over batches of lines emitted after this call.
 
-        on first call, yields any lines already in the ring buffer as a backfill
-        batch (so callers that emit before calling next() receive no drops).
-        subsequently blocks up to HEARTBEAT_SECONDS for new lines, then drains
-        whatever else is queued so a burst coalesces into one batch.
+        the subscriber queue is registered eagerly (before the first next()),
+        so a line emitted between subscribe() and the first iteration is still
+        captured. the stream intentionally does NOT replay the existing buffer:
+        callers paint the initial view from snapshot() / the server-rendered
+        page, then append streamed lines. an empty list is a heartbeat.
         """
         q: queue.Queue[LogLine] = queue.Queue(maxsize=self._SUBSCRIBER_QUEUE_MAX)
         with self._lock:
             self._subscribers.add(q)
-            backfill = list(self._lines)
-        # yields backfill outside the lock so writers are never blocked
-        if backfill:
-            yield backfill
+        return self._drain(q)
+
+    def _drain(self, q: queue.Queue[LogLine]) -> Generator[list[LogLine], None, None]:
+        """yields batches drained from one subscriber queue until closed.
+
+        blocks up to HEARTBEAT_SECONDS for the first line, then drains whatever
+        else is queued so a burst coalesces into one batch.
+        """
         try:
             while True:
                 try:
