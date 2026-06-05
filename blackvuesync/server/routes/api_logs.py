@@ -53,18 +53,17 @@ def stream() -> Response:
     comment every HEARTBEAT_SECONDS when no lines arrive.
     """
     buf = _buffer()
-    # snapshot taken before subscribe() so lines emitted between the snapshot
-    # and the first subscribe() drain are captured by the subscriber queue and
-    # not dropped; duplicates are prevented by the seq field on the client side.
-    initial = buf.snapshot()
 
     def _sse_events() -> Iterator[bytes]:
-        # emit the ring-buffer snapshot as the first frame so the client has
-        # recent history immediately on connect without a separate /recent call.
+        # register the subscriber first, then snapshot: a line emitted in the
+        # gap then lands in the subscriber queue (never lost) and merely
+        # duplicates the snapshot, which the client de-duplicates by seq.
+        batches = buf.subscribe()
+        initial = buf.snapshot()
         if initial:
             payload = json.dumps({"lines": [dataclasses.asdict(ln) for ln in initial]})
             yield f"event: logs\ndata: {payload}\n\n".encode()
-        for batch in buf.subscribe():
+        for batch in batches:
             if not batch:
                 yield b": keepalive\n\n"
             else:
