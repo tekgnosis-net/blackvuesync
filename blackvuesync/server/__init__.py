@@ -10,6 +10,7 @@ from flask import Flask, Response, request
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+from blackvuesync.server.log_buffer import LogBuffer
 from blackvuesync.server.progress import ProgressPublisher
 from blackvuesync.settings import SettingsStore
 
@@ -18,6 +19,8 @@ def create_app(  # pylint: disable=too-many-locals
     settings_store: SettingsStore,
     testing: bool = False,
     progress_publisher: Optional[ProgressPublisher] = None,
+    log_buffer: Optional[LogBuffer] = None,
+    log_file_path: Optional[str] = None,
 ) -> Flask:
     """constructs and configures the Flask app with auth, routes, and middleware.
 
@@ -29,6 +32,12 @@ def create_app(  # pylint: disable=too-many-locals
     # attaches or creates the progress publisher; defaults to a new instance so
     # all routes have a live publisher even in tests that don't supply one.
     app.progress_publisher = progress_publisher or ProgressPublisher()  # type: ignore[attr-defined]
+    # attaches or creates the log buffer; defaults to a new instance so route
+    # tests have a live buffer even when serve mode did not supply one.
+    app.log_buffer = log_buffer or LogBuffer()  # type: ignore[attr-defined]
+    # absolute path of the rotating log file for the viewer to display; None
+    # (rendered as "") when no file handler is configured (e.g. in tests).
+    app.log_file_path = log_file_path  # type: ignore[attr-defined]
 
     settings = settings_store.get()
     secret = settings.auth.session_secret or "dev-insecure-placeholder"
@@ -68,6 +77,7 @@ def create_app(  # pylint: disable=too-many-locals
     from blackvuesync.server.routes.api_auth import api_auth_bp
     from blackvuesync.server.routes.api_dashcam import api_dashcam_bp
     from blackvuesync.server.routes.api_health import api_health_bp
+    from blackvuesync.server.routes.api_logs import api_logs_bp
     from blackvuesync.server.routes.api_recordings import api_recordings_bp
     from blackvuesync.server.routes.api_schedule import api_schedule_bp
     from blackvuesync.server.routes.api_settings import api_settings_bp
@@ -90,6 +100,7 @@ def create_app(  # pylint: disable=too-many-locals
     app.register_blueprint(api_schedule_bp)
     app.register_blueprint(api_settings_bp)
     app.register_blueprint(api_sync_bp)
+    app.register_blueprint(api_logs_bp)
     app.register_blueprint(hx_dashboard_bp)
     app.register_blueprint(hx_sync_bp)
 
