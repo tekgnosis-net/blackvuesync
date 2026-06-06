@@ -143,3 +143,4 @@ def test_stats_page_has_noscript_fallback(app_and_client: Any) -> None:
     _seed(stats, 3)
     resp = client.get("/stats")
     assert b"<noscript>" in resp.data
+    assert resp.data.count(b"<tr>") >= 4  # 1 header row + 3 seeded data rows
