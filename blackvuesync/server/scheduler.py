@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 from apscheduler.executors.pool import ThreadPoolExecutor
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -11,6 +12,9 @@ from apscheduler.triggers.cron import CronTrigger
 from blackvuesync.server.progress import ProgressPublisher
 from blackvuesync.server.sync_runner import trigger_sync
 from blackvuesync.settings import Settings, SettingsStore
+
+if TYPE_CHECKING:
+    from blackvuesync.server.stats_store import StatsStore
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +30,11 @@ def _build_trigger(settings: Settings) -> CronTrigger:
     )
 
 
-def _scheduled_run(store: SettingsStore, publisher: ProgressPublisher) -> None:
+def _scheduled_run(
+    store: SettingsStore,
+    publisher: ProgressPublisher,
+    stats_store: StatsStore | None = None,
+) -> None:
     """job function: triggers a sync via the shared trigger_sync entrypoint.
 
     settings are read fresh on each tick so updates to e.g. address, timeout,
@@ -36,7 +44,7 @@ def _scheduled_run(store: SettingsStore, publisher: ProgressPublisher) -> None:
     if settings.schedule.paused:
         logger.info("scheduled sync skipped: schedule is paused")
         return
-    result = trigger_sync(settings, publisher)
+    result = trigger_sync(settings, publisher, stats_store)
     if result["status"] == "already_running":
         logger.info(
             "scheduled sync skipped: another sync is already running (job_id=%s)",
@@ -45,7 +53,9 @@ def _scheduled_run(store: SettingsStore, publisher: ProgressPublisher) -> None:
 
 
 def init_scheduler(
-    store: SettingsStore, publisher: ProgressPublisher
+    store: SettingsStore,
+    publisher: ProgressPublisher,
+    stats_store: StatsStore | None = None,
 ) -> BackgroundScheduler:
     """initializes and starts a BackgroundScheduler with one cron-triggered job.
 
@@ -64,7 +74,7 @@ def init_scheduler(
         _scheduled_run,
         trigger=_build_trigger(store.get()),
         id=_JOB_ID,
-        args=(store, publisher),
+        args=(store, publisher, stats_store),
         max_instances=1,
         coalesce=True,
         replace_existing=True,

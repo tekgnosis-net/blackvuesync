@@ -1007,3 +1007,38 @@ class TestSchedulePaused:
 
         assert ScheduleSettings(paused=False).validate() == []
         assert ScheduleSettings(paused=True).validate() == []
+
+
+# ---------------------------------------------------------------------------
+# stats section
+# ---------------------------------------------------------------------------
+
+
+def test_stats_section_defaults_and_validate() -> None:
+    from blackvuesync.settings import Settings, StatsSettings
+
+    s = Settings()
+    assert isinstance(s.stats, StatsSettings)
+    assert s.stats.retention_days == 365
+    assert StatsSettings(retention_days=0).validate() == []
+    assert StatsSettings(retention_days=-1).validate() == [
+        "stats.retention_days must be zero or greater"
+    ]
+
+
+def test_stats_section_roundtrips_through_dict() -> None:
+    import dataclasses
+
+    from blackvuesync.settings import Settings, _settings_from_dict, _settings_to_dict
+
+    s = Settings(stats=dataclasses.replace(Settings().stats, retention_days=30))
+    raw = _settings_to_dict(s)
+    assert raw["stats"] == {"retention_days": 30}
+    assert _settings_from_dict(raw).stats.retention_days == 30
+
+
+def test_stats_section_defaults_when_absent_from_file() -> None:
+    from blackvuesync.settings import _settings_from_dict
+
+    settings = _settings_from_dict({"version": 1, "connection": {"address": "1.2.3.4"}})
+    assert settings.stats.retention_days == 365

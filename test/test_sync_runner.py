@@ -6,6 +6,7 @@ import contextlib
 import threading
 import time
 from collections.abc import Generator
+from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -51,6 +52,7 @@ def _noop(
     pub: ProgressPublisher,
     *,
     job_id: str,
+    stats_store: Any = None,  # noqa: ARG001
 ) -> None:
     """no-op _do_sync stub; simulates sync.py owning begin_job/end_job."""
     pub.begin_job(0, job_id=job_id)
@@ -102,6 +104,7 @@ class TestTriggerSync:
             p: ProgressPublisher,
             *,
             job_id: str,  # noqa: ARG001
+            stats_store: Any = None,  # noqa: ARG001
         ) -> None:
             _slow_noop(s, p, job_id=job_id, started=started, proceed=proceed)
 
@@ -127,6 +130,7 @@ class TestTriggerSync:
             p: ProgressPublisher,
             *,
             job_id: str,  # noqa: ARG001
+            stats_store: Any = None,  # noqa: ARG001
         ) -> None:
             _slow_noop(s, p, job_id=job_id, started=started, proceed=proceed)
 
@@ -149,6 +153,7 @@ class TestTriggerSync:
             p: ProgressPublisher,
             *,
             job_id: str,  # noqa: ARG001
+            stats_store: Any = None,  # noqa: ARG001
         ) -> None:
             p.begin_job(0, job_id=job_id)
             time.sleep(0.05)
@@ -178,6 +183,7 @@ class TestTriggerSync:
             p: ProgressPublisher,
             *,
             job_id: str,  # noqa: ARG001
+            stats_store: Any = None,  # noqa: ARG001
         ) -> None:
             p.begin_job(0, job_id=job_id)
             thread_ref.append(threading.current_thread())
@@ -193,3 +199,128 @@ class TestTriggerSync:
 
         assert len(thread_ref) == 1
         assert thread_ref[0].daemon is True
+
+
+def test_do_sync_records_a_row_and_finalizes_metrics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import types
+
+    import blackvuesync.server.sync_runner as runner
+    import blackvuesync.sync as _sync
+    from blackvuesync.server.progress import ProgressPublisher
+    from blackvuesync.server.stats_store import StatsStore
+
+    destination = tmp_path / "rec"
+    destination.mkdir()
+
+    monkeypatch.setattr(_sync, "ensure_destination", lambda _d: None)
+    monkeypatch.setattr(_sync, "lock", lambda _d: 1)
+    monkeypatch.setattr(_sync, "unlock", lambda _fd: None)
+    monkeypatch.setattr(_sync, "clean_destination", lambda _d, _g: None)
+
+    def fake_sync(
+        _address: Any,
+        _dest: Any,
+        _grouping: Any,
+        _prio: Any,
+        _include: Any,
+        _exclude: Any,
+        metrics: Any = None,
+        publisher: Any = None,  # noqa: ARG001
+        job_id: Any = None,  # noqa: ARG001
+    ) -> None:
+        if metrics is not None:
+            metrics.record_file_download(123)
+            metrics.record_destination_disk_usage(50, 100)
+
+    monkeypatch.setattr(_sync, "sync", fake_sync)
+
+    settings = types.SimpleNamespace(
+        connection=types.SimpleNamespace(address="1.2.3.4", timeout_seconds=10.0),
+        system=types.SimpleNamespace(destination=str(destination), dry_run=False),
+        sync=types.SimpleNamespace(
+            grouping="none", priority="date", include=(), exclude=()
+        ),
+        retention=types.SimpleNamespace(max_used_disk_percent=90),
+        metrics=types.SimpleNamespace(
+            file=None,
+            pushgateway_url=None,
+            job="blackvuesync",
+            instance=None,
+            state_file=str(tmp_path / "metrics-state.json"),
+        ),
+        stats=types.SimpleNamespace(retention_days=365),
+    )
+    store = StatsStore(str(tmp_path / "stats.db"))
+    pub = ProgressPublisher()
+
+    runner._do_sync(settings, pub, job_id="abc", stats_store=store)
+
+    rows = store.query()
+    assert len(rows) == 1
+    assert rows[0].files == 1
+    assert rows[0].bytes == 123
+    assert rows[0].disk_used_ratio == 0.5
+    assert rows[0].success == 1
+
+
+def test_do_sync_records_failure_row_when_sync_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import types
+
+    import blackvuesync.server.sync_runner as runner
+    import blackvuesync.sync as _sync
+    from blackvuesync.server.progress import ProgressPublisher
+    from blackvuesync.server.stats_store import StatsStore
+
+    destination = tmp_path / "rec"
+    destination.mkdir()
+
+    monkeypatch.setattr(_sync, "ensure_destination", lambda _d: None)
+    monkeypatch.setattr(_sync, "lock", lambda _d: 1)
+    monkeypatch.setattr(_sync, "unlock", lambda _fd: None)
+    monkeypatch.setattr(_sync, "clean_destination", lambda _d, _g: None)
+
+    def fake_sync(
+        _address: Any,
+        _dest: Any,
+        _grouping: Any,
+        _prio: Any,
+        _include: Any,
+        _exclude: Any,
+        metrics: Any = None,  # noqa: ARG001
+        publisher: Any = None,  # noqa: ARG001
+        job_id: Any = None,  # noqa: ARG001
+    ) -> None:
+        raise RuntimeError("dashcam unavailable: network")
+
+    monkeypatch.setattr(_sync, "sync", fake_sync)
+
+    settings = types.SimpleNamespace(
+        connection=types.SimpleNamespace(address="1.2.3.4", timeout_seconds=10.0),
+        system=types.SimpleNamespace(destination=str(destination), dry_run=False),
+        sync=types.SimpleNamespace(
+            grouping="none", priority="date", include=(), exclude=()
+        ),
+        retention=types.SimpleNamespace(max_used_disk_percent=90),
+        metrics=types.SimpleNamespace(
+            file=None,
+            pushgateway_url=None,
+            job="blackvuesync",
+            instance=None,
+            state_file=str(tmp_path / "metrics-state.json"),
+        ),
+        stats=types.SimpleNamespace(retention_days=365),
+    )
+    store = StatsStore(str(tmp_path / "stats.db"))
+    pub = ProgressPublisher()
+
+    runner._do_sync(settings, pub, job_id="abc", stats_store=store)
+
+    rows = store.query()
+    assert len(rows) == 1
+    assert rows[0].success == 0
+    assert rows[0].exit_code == 1
+    assert rows[0].failures.get("network", 0) >= 1
