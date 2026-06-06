@@ -12,15 +12,17 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 from blackvuesync.server.log_buffer import LogBuffer
 from blackvuesync.server.progress import ProgressPublisher
+from blackvuesync.server.stats_store import StatsStore
 from blackvuesync.settings import SettingsStore
 
 
-def create_app(  # pylint: disable=too-many-locals
+def create_app(  # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
     settings_store: SettingsStore,
     testing: bool = False,
     progress_publisher: Optional[ProgressPublisher] = None,
     log_buffer: Optional[LogBuffer] = None,
     log_file_path: Optional[str] = None,
+    stats_store: Optional[StatsStore] = None,
 ) -> Flask:
     """constructs and configures the Flask app with auth, routes, and middleware.
 
@@ -38,6 +40,9 @@ def create_app(  # pylint: disable=too-many-locals
     # absolute path of the rotating log file for the viewer to display; None
     # (rendered as "") when no file handler is configured (e.g. in tests).
     app.log_file_path = log_file_path  # type: ignore[attr-defined]
+    # attaches the stats store, or an empty in-memory store so route/page
+    # handlers always have one even when serve mode did not supply it.
+    app.stats_store = stats_store or StatsStore(":memory:")  # type: ignore[attr-defined]
 
     settings = settings_store.get()
     secret = settings.auth.session_secret or "dev-insecure-placeholder"
@@ -81,6 +86,7 @@ def create_app(  # pylint: disable=too-many-locals
     from blackvuesync.server.routes.api_recordings import api_recordings_bp
     from blackvuesync.server.routes.api_schedule import api_schedule_bp
     from blackvuesync.server.routes.api_settings import api_settings_bp
+    from blackvuesync.server.routes.api_stats import api_stats_bp
     from blackvuesync.server.routes.api_sync import api_sync_bp
     from blackvuesync.server.routes.auth import bp as auth_bp
     from blackvuesync.server.routes.health import bp as health_bp
@@ -101,6 +107,7 @@ def create_app(  # pylint: disable=too-many-locals
     app.register_blueprint(api_settings_bp)
     app.register_blueprint(api_sync_bp)
     app.register_blueprint(api_logs_bp)
+    app.register_blueprint(api_stats_bp)
     app.register_blueprint(hx_dashboard_bp)
     app.register_blueprint(hx_sync_bp)
 

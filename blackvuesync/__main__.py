@@ -510,6 +510,7 @@ def cmd_serve(args: argparse.Namespace) -> int:  # pylint: disable=too-many-loca
     from blackvuesync.server.log_buffer import LogBuffer
     from blackvuesync.server.progress import ProgressPublisher
     from blackvuesync.server.scheduler import init_scheduler
+    from blackvuesync.server.stats_store import StatsStore
 
     # pylint: enable=import-outside-toplevel
 
@@ -537,15 +538,19 @@ def cmd_serve(args: argparse.Namespace) -> int:  # pylint: disable=too-many-loca
     configure_logging(settings.logging.format)
 
     publisher = ProgressPublisher()
+    # persists per-run metrics next to settings.json so the stats page survives
+    # restarts; the scheduler records into it after every run.
+    stats_store = StatsStore(str(config_path.parent / "stats.db"))
     app = create_app(
         store,
         progress_publisher=publisher,
         log_buffer=log_buffer,
         log_file_path=log_file_path,
+        stats_store=stats_store,
     )
     port = args.port if args.port is not None else settings.web.port
 
-    scheduler = init_scheduler(store, publisher)
+    scheduler = init_scheduler(store, publisher, stats_store)
     _register_logging_reload(store)
     # second listener: resizes the ring buffer / rebuilds the file handler live.
     file_handler_box = [file_handler]
