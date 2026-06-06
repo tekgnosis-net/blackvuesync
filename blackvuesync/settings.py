@@ -214,9 +214,10 @@ class StatsSettings:
 
     def validate(self) -> list[str]:
         """validates stats settings; returns a list of error strings."""
+        errors: list[str] = []
         if self.retention_days < 0:
-            return ["stats.retention_days must be zero or greater"]
-        return []
+            errors.append("stats.retention_days must be zero or greater")
+        return errors
 
 
 @dataclass(frozen=True)

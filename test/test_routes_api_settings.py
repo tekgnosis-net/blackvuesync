@@ -215,18 +215,15 @@ class TestPatchSettings:
         assert resp.status_code == 200
         assert isinstance(store.get().sync.skip_metadata, tuple)
 
-
-def test_stats_section_get_and_patch(logged_in_client: Any) -> None:
-    import json as _json
-
-    client, _ = logged_in_client
-    body = _json.loads(client.get("/api/settings").data)
-    assert body["stats"]["retention_days"] == 365
-    assert body["stats"]["_tier"] == "next_tick"
-    patch = client.patch("/api/settings/stats", json={"retention_days": 30})
-    assert patch.status_code == 200
-    after = _json.loads(client.get("/api/settings").data)
-    assert after["stats"]["retention_days"] == 30
+    def test_stats_section_get_and_patch(self, logged_in_client: Any) -> None:
+        client, _ = logged_in_client
+        body = json.loads(client.get("/api/settings").data)
+        assert body["stats"]["retention_days"] == 365
+        assert body["stats"]["_tier"] == "next_tick"
+        patch = client.patch("/api/settings/stats", json={"retention_days": 30})
+        assert patch.status_code == 200
+        after = json.loads(client.get("/api/settings").data)
+        assert after["stats"]["retention_days"] == 30
 
 
 class TestCsrf:
