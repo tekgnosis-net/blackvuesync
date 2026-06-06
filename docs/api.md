@@ -594,6 +594,23 @@ The viewer changes capture verbosity through the existing
 
 ---
 
+## Statistics API Endpoints
+
+All endpoints below require authentication (subject to `auth.mode`).
+
+| Method | Path | Description |
+| --- | --- | --- |
+| `GET` | `/api/stats/series?range=24h\|7d\|30d\|all` | JSON `{range, summary, series, forecast}` |
+
+`summary` = `{runs, bytes, avg_duration_seconds, success_rate}`;
+`series.points[]` = `{ts, bytes, files, duration, disk, success, failures{reason}}`;
+`forecast` = `{projected[{ts, disk}], limits{max_used_disk_percent, keep_steady_state}}`
+(disk / limit values are 0..1 ratios). Per-run rows are captured in serve mode and
+stored in the SQLite stats DB (`/config/stats.db`); `stats.retention_days` prunes
+old rows.
+
+---
+
 ## Settings UI (Sub-Project #3)
 
 The `/settings` page added in Sub-Project #3 drives the existing
