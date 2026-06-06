@@ -107,11 +107,14 @@ def logs() -> str:
 @bp.route("/stats", methods=["GET"])
 @login_required
 def stats() -> str:
-    """renders the statistics placeholder page."""
+    """renders the statistics page; charts hydrate client-side from the api."""
+    store = current_app.stats_store  # type: ignore[attr-defined]
+    recent = list(reversed(store.query()))[:20]  # newest 20 for the no-js fallback
     return render_template(
-        "_placeholders/stats.html",
+        "stats.html",
         version=__version__,
         page="stats",
+        recent=recent,
     )
 
 

@@ -127,3 +127,19 @@ def test_series_window_filters_rows_and_populates_forecast(app_and_client: Any) 
     projected = all_body["forecast"]["projected"]
     assert len(projected) == 12
     assert all(p["disk"] <= 0.9 + 1e-9 for p in projected)
+
+
+def test_stats_page_renders(app_and_client: Any) -> None:
+    app, client, _stats = app_and_client
+    resp = client.get("/stats")
+    assert resp.status_code == 200
+    assert b"js/stats.js" in resp.data
+    assert b"js/chart.umd.min.js" in resp.data
+    assert b"data-range" in resp.data  # range selector present
+
+
+def test_stats_page_has_noscript_fallback(app_and_client: Any) -> None:
+    app, client, stats = app_and_client
+    _seed(stats, 3)
+    resp = client.get("/stats")
+    assert b"<noscript>" in resp.data
