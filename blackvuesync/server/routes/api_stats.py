@@ -26,7 +26,7 @@ _RANGES: dict[str, float | None] = {
 }
 
 _DURATION_RE = re.compile(r"^(\d+)([shdw]?)$")
-_DURATION_DAYS = {"s": 1 / 86400.0, "h": 1 / 24.0, "d": 1.0, "w": 7.0, "": 1.0}
+_DURATION_DAYS = {"s": 1 / _SECONDS_PER_DAY, "h": 1 / 24.0, "d": 1.0, "w": 7.0, "": 1.0}
 
 
 def _store() -> StatsStore:
@@ -131,6 +131,7 @@ def series() -> Response:
                 "projected": [
                     {"ts": ts, "disk": disk} for ts, disk in forecast.projected
                 ],
+                # limit values are 0..1 ratios (e.g. 0.9 == 90%), not percentages
                 "limits": {
                     "max_used_disk_percent": forecast.max_used_disk_percent,
                     "keep_steady_state": forecast.keep_steady_state,

@@ -91,3 +91,39 @@ def test_series_rejects_unknown_range(app_and_client: Any) -> None:
     app, client, _stats = app_and_client
     resp = client.get("/api/stats/series?range=bogus")
     assert resp.status_code == 400
+
+
+def test_series_window_filters_rows_and_populates_forecast(app_and_client: Any) -> None:
+    app, client, stats = app_and_client
+    now = time.time()
+    # two rows ~48h old (outside 24h) + four recent rows (inside 24h), rising disk
+    timestamps = [
+        now - 48 * 3600,
+        now - 47 * 3600,
+        now - 4 * 3600,
+        now - 3 * 3600,
+        now - 2 * 3600,
+        now - 1 * 3600,
+    ]
+    for i, ts in enumerate(timestamps):
+        m = SyncMetrics(run_start_monotonic=0.0, run_start_timestamp=now)
+        m.last_run_timestamp_seconds = ts
+        m.last_run_success = 1
+        m.last_run_exit_code = 0
+        m.run_duration_seconds = 2.0
+        m.files_downloaded_last_run = i
+        m.bytes_downloaded_last_run = i * 1000
+        m.destination_disk_used_ratio = 0.40 + i * 0.02
+        stats.record_run(m)
+
+    all_body = json.loads(client.get("/api/stats/series?range=all").data)
+    day_body = json.loads(client.get("/api/stats/series?range=24h").data)
+
+    assert all_body["summary"]["runs"] == 6
+    assert day_body["summary"]["runs"] == 4  # only the four within 24h
+    assert len(day_body["series"]["points"]) < len(all_body["series"]["points"])
+
+    # >= 3 points -> forecast projects 12 steps, each clamped to <= the 0.9 cap
+    projected = all_body["forecast"]["projected"]
+    assert len(projected) == 12
+    assert all(p["disk"] <= 0.9 + 1e-9 for p in projected)
