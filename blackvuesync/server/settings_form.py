@@ -118,6 +118,15 @@ SECTION_FIELD_SPECS: dict[str, tuple[FieldSpec, ...]] = {
         FieldSpec("instance", "Instance", "text", "text"),
         FieldSpec("state_file", "State file", "text", "text"),
     ),
+    "stats": (
+        FieldSpec(
+            "retention_days",
+            "History retention (days)",
+            "number",
+            "number",
+            help="prune run history older than this; 0 keeps all",
+        ),
+    ),
     "web": (
         FieldSpec("port", "Port", "number", "number"),
         FieldSpec(
@@ -154,6 +163,7 @@ SECTION_LABELS: dict[str, str] = {
     "retention": "Retention",
     "logging": "Logging",
     "metrics": "Metrics",
+    "stats": "Statistics",
     "web": "Web",
     "auth": "Auth",
     "system": "System",

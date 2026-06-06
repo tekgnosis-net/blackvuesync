@@ -73,6 +73,7 @@ def test_build_sections_pairs_values_and_tier() -> None:
             "proxy_user_header": "X-Remote-User",
             "_tier": "immediate",
         },
+        "stats": {"retention_days": 365, "_tier": "next_tick"},
         "system": {"destination": "/recordings", "dry_run": False, "_tier": "restart"},
     }
     sections = build_sections(settings_dict)
@@ -104,3 +105,13 @@ def test_lines_widget_value_is_joined() -> None:
     inc = next(f for f in sections["sync"]["fields"] if f["name"] == "include")
     assert inc["widget"] == "lines"
     assert inc["value"] == "a*\nb*"  # tuple-of-strings joined for the textarea
+
+
+def test_stats_section_has_retention_field() -> None:
+    from blackvuesync.server.settings_form import SECTION_FIELD_SPECS, SECTION_LABELS
+
+    assert SECTION_LABELS["stats"] == "Statistics"
+    names = [f.name for f in SECTION_FIELD_SPECS["stats"]]
+    assert names == ["retention_days"]
+    spec = SECTION_FIELD_SPECS["stats"][0]
+    assert spec.widget == "number" and spec.data_type == "number"

@@ -205,6 +205,21 @@ class MetricsSettings:
 
 
 @dataclass(frozen=True)
+class StatsSettings:
+    """statistics time-series store settings."""
+
+    TIER: ClassVar[PropagationTier] = "next_tick"
+
+    retention_days: int = 365  # prune run records older than this; 0 keeps all
+
+    def validate(self) -> list[str]:
+        """validates stats settings; returns a list of error strings."""
+        if self.retention_days < 0:
+            return ["stats.retention_days must be zero or greater"]
+        return []
+
+
+@dataclass(frozen=True)
 class WebSettings:
     """web server settings."""
 
@@ -289,6 +304,7 @@ class Settings:  # pylint: disable=too-many-instance-attributes
     retention: RetentionSettings = field(default_factory=RetentionSettings)
     logging: LoggingSettings = field(default_factory=LoggingSettings)
     metrics: MetricsSettings = field(default_factory=MetricsSettings)
+    stats: StatsSettings = field(default_factory=StatsSettings)
     web: WebSettings = field(default_factory=WebSettings)
     auth: AuthSettings = field(default_factory=AuthSettings)
     system: SystemSettings = field(default_factory=SystemSettings)
@@ -302,6 +318,7 @@ class Settings:  # pylint: disable=too-many-instance-attributes
         errors.extend(self.retention.validate())
         errors.extend(self.logging.validate())
         errors.extend(self.metrics.validate())
+        errors.extend(self.stats.validate())
         errors.extend(self.web.validate())
         errors.extend(self.auth.validate())
         errors.extend(self.system.validate())
@@ -320,6 +337,7 @@ _SECTION_FIELDS: dict[str, type] = {
     "retention": RetentionSettings,
     "logging": LoggingSettings,
     "metrics": MetricsSettings,
+    "stats": StatsSettings,
     "web": WebSettings,
     "auth": AuthSettings,
     "system": SystemSettings,
@@ -576,6 +594,10 @@ class SettingsStore:
             state_file=_env("METRICS_STATE_FILE", "/config/metrics-state.json"),
         )
 
+        stats = StatsSettings(
+            retention_days=int(_env("STATS_RETENTION_DAYS", "365")),
+        )
+
         web = WebSettings(
             port=int(_env("BLACKVUESYNC_PORT", "8080")),
         )
@@ -600,6 +622,7 @@ class SettingsStore:
             retention=retention,
             logging=log_settings,
             metrics=metrics,
+            stats=stats,
             web=web,
             auth=auth,
         )
