@@ -99,3 +99,13 @@ def test_dry_run_flag_persisted(tmp_path: Path) -> None:
     m.dry_run = True
     store.record_run(m)
     assert store.query()[0].dry_run == 1
+
+
+def test_in_memory_store_is_usable() -> None:
+    store = StatsStore(":memory:")
+    assert store.query() == []  # no rows, must not raise
+    store.record_run(_metrics(1000.0, files=4))
+    rows = store.query()
+    assert len(rows) == 1
+    assert rows[0].files == 4
+    assert store.prune(retention_days=0) == 0

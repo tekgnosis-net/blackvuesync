@@ -1191,7 +1191,7 @@ After the `app.log_file_path = log_file_path` line, add:
     app.stats_store = stats_store or StatsStore(":memory:")  # type: ignore[attr-defined]
 ```
 
-> Note: `":memory:"` is per-connection in sqlite, so the default in-memory store is empty on every read -- adequate as a "no data" default for tests/non-serve. Tests that need data pass a real file-backed `StatsStore`.
+> Note: `StatsStore` supports `":memory:"` via a persistent connection, so the default in-memory store is a working empty store for tests / non-serve reads. Tests that need data pass a real file-backed `StatsStore`.
 
 In the deferred blueprint-import block, add after `api_logs_bp`:
 

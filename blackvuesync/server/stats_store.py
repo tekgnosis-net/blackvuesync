@@ -1,9 +1,11 @@
 """sqlite time-series store of per-run sync metrics (serve mode only).
 
-one row per sync run. sqlite3 is stdlib (no new dependency). the sync thread
-is the sole writer; flask handlers are readers. WAL lets reads proceed during
-a write. a short-lived connection is opened per call (never shared across
-threads).
+one row per sync run. sqlite3 is stdlib (no new dependency). file-backed paths
+open a fresh short-lived connection per call (WAL lets reads proceed during a
+write). the special ":memory:" path keeps a single persistent connection --
+a per-call in-memory connection would see an empty database -- reused under a
+lock; it serves only as an empty default store (e.g. in tests) and is never
+the production sink.
 """
 
 from __future__ import annotations
@@ -12,7 +14,9 @@ import contextlib
 import dataclasses
 import json
 import sqlite3
+import threading
 import time
+from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -62,15 +66,40 @@ class StatsStore:
 
     def __init__(self, db_path: str) -> None:
         self._db_path = db_path
-        with contextlib.closing(self._connect()) as conn:
+        self._lock = threading.Lock()
+        # an in-memory database exists only while a connection is held open; a
+        # fresh per-call connection would see an empty db. so ":memory:" keeps
+        # one persistent connection (reused under the lock); file paths use a
+        # short-lived connection per call.
+        self._shared: sqlite3.Connection | None = (
+            self._new_connection() if db_path == ":memory:" else None
+        )
+        with self._borrow() as conn:
             conn.executescript(_SCHEMA)
 
-    def _connect(self) -> sqlite3.Connection:
-        """opens a fresh WAL connection with row access by name."""
-        conn = sqlite3.connect(self._db_path)
+    def _new_connection(self) -> sqlite3.Connection:
+        """opens a WAL connection with row access by name."""
+        conn = sqlite3.connect(self._db_path, check_same_thread=False)
         conn.execute("PRAGMA journal_mode=WAL")
         conn.row_factory = sqlite3.Row
         return conn
+
+    @contextlib.contextmanager
+    def _borrow(self) -> Iterator[sqlite3.Connection]:
+        """yields a connection for one operation.
+
+        the shared in-memory connection is reused under the lock and never
+        closed; file-backed connections are opened and closed per call.
+        """
+        if self._shared is not None:
+            with self._lock:
+                yield self._shared
+            return
+        conn = self._new_connection()
+        try:
+            yield conn
+        finally:
+            conn.close()
 
     def record_run(self, metrics: SyncMetrics) -> None:
         """inserts (or replaces) one run row from a finalized SyncMetrics.
@@ -97,15 +126,17 @@ class StatsStore:
             json.dumps(failures, separators=(",", ":")),
             1 if metrics.dry_run else 0,
         )
-        with contextlib.closing(self._connect()) as conn:  # noqa: SIM117
-            with conn:
-                conn.execute(
-                    "INSERT OR REPLACE INTO runs (ts_seconds, success, exit_code, "
-                    "duration_seconds, files, bytes, recordings_seen, "
-                    "recordings_selected, disk_used_ratio, failed_markers, "
-                    "failures_json, dry_run) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                    row,
-                )
+        with (  # noqa: SIM117  # pylint: disable=confusing-with-statement
+            self._borrow() as conn,
+            conn,
+        ):
+            conn.execute(
+                "INSERT OR REPLACE INTO runs (ts_seconds, success, exit_code, "
+                "duration_seconds, files, bytes, recordings_seen, "
+                "recordings_selected, disk_used_ratio, failed_markers, "
+                "failures_json, dry_run) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                row,
+            )
 
     def query(self, since_ts: float | None = None) -> list[RunRow]:
         """returns rows ordered by timestamp ascending; optionally since since_ts."""
@@ -115,7 +146,7 @@ class StatsStore:
             sql += " WHERE ts_seconds >= ?"
             params = (since_ts,)
         sql += " ORDER BY ts_seconds ASC"
-        with contextlib.closing(self._connect()) as conn:
+        with self._borrow() as conn:
             cursor = conn.execute(sql, params)
             return [self._to_row(r) for r in cursor.fetchall()]
 
@@ -127,12 +158,12 @@ class StatsStore:
         if retention_days <= 0:
             return 0
         cutoff = time.time() - retention_days * _SECONDS_PER_DAY
-        with contextlib.closing(self._connect()) as conn:  # noqa: SIM117
-            with conn:
-                cursor = conn.execute(
-                    "DELETE FROM runs WHERE ts_seconds < ?", (cutoff,)
-                )
-                return cursor.rowcount
+        with (  # noqa: SIM117  # pylint: disable=confusing-with-statement
+            self._borrow() as conn,
+            conn,
+        ):
+            cursor = conn.execute("DELETE FROM runs WHERE ts_seconds < ?", (cutoff,))
+            return cursor.rowcount
 
     @staticmethod
     def _to_row(record: sqlite3.Row) -> RunRow:
