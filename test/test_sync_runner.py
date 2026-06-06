@@ -263,3 +263,64 @@ def test_do_sync_records_a_row_and_finalizes_metrics(
     assert rows[0].bytes == 123
     assert rows[0].disk_used_ratio == 0.5
     assert rows[0].success == 1
+
+
+def test_do_sync_records_failure_row_when_sync_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import types
+
+    import blackvuesync.server.sync_runner as runner
+    import blackvuesync.sync as _sync
+    from blackvuesync.server.progress import ProgressPublisher
+    from blackvuesync.server.stats_store import StatsStore
+
+    destination = tmp_path / "rec"
+    destination.mkdir()
+
+    monkeypatch.setattr(_sync, "ensure_destination", lambda _d: None)
+    monkeypatch.setattr(_sync, "lock", lambda _d: 1)
+    monkeypatch.setattr(_sync, "unlock", lambda _fd: None)
+    monkeypatch.setattr(_sync, "clean_destination", lambda _d, _g: None)
+
+    def fake_sync(
+        _address: Any,
+        _dest: Any,
+        _grouping: Any,
+        _prio: Any,
+        _include: Any,
+        _exclude: Any,
+        metrics: Any = None,  # noqa: ARG001
+        publisher: Any = None,  # noqa: ARG001
+        job_id: Any = None,  # noqa: ARG001
+    ) -> None:
+        raise RuntimeError("dashcam unavailable: network")
+
+    monkeypatch.setattr(_sync, "sync", fake_sync)
+
+    settings = types.SimpleNamespace(
+        connection=types.SimpleNamespace(address="1.2.3.4", timeout_seconds=10.0),
+        system=types.SimpleNamespace(destination=str(destination), dry_run=False),
+        sync=types.SimpleNamespace(
+            grouping="none", priority="date", include=(), exclude=()
+        ),
+        retention=types.SimpleNamespace(max_used_disk_percent=90),
+        metrics=types.SimpleNamespace(
+            file=None,
+            pushgateway_url=None,
+            job="blackvuesync",
+            instance=None,
+            state_file=str(tmp_path / "metrics-state.json"),
+        ),
+        stats=types.SimpleNamespace(retention_days=365),
+    )
+    store = StatsStore(str(tmp_path / "stats.db"))
+    pub = ProgressPublisher()
+
+    runner._do_sync(settings, pub, job_id="abc", stats_store=store)
+
+    rows = store.query()
+    assert len(rows) == 1
+    assert rows[0].success == 0
+    assert rows[0].exit_code == 1
+    assert rows[0].failures.get("network", 0) >= 1

@@ -92,6 +92,7 @@ def _do_sync(  # pylint: disable=too-many-locals,too-many-statements
     import blackvuesync.sync as _sync
     from blackvuesync.metrics import (
         SyncMetrics,
+        classify_run_failure,
         count_failed_marker_files,
         emit_metrics,
         load_metrics_state,
@@ -155,8 +156,11 @@ def _do_sync(  # pylint: disable=too-many-locals,too-many-statements
             sync_success = True
         finally:
             clean_destination(destination, grouping)
-    except Exception:  # pylint: disable=broad-exception-caught
+    except Exception as exc:  # pylint: disable=broad-exception-caught
         logger.exception("sync_runner: sync failed")
+        if metrics is not None:
+            with contextlib.suppress(Exception):
+                metrics.record_run_failure(classify_run_failure(exc))
     finally:
         if lf_fd is not None:
             with contextlib.suppress(Exception):
@@ -175,9 +179,13 @@ def _do_sync(  # pylint: disable=too-many-locals,too-many-statements
                     settings.connection.timeout_seconds,
                 )
             if stats_store is not None:
-                with contextlib.suppress(Exception):
+                try:
                     stats_store.record_run(metrics)
                     stats_store.prune(settings.stats.retention_days)
+                except Exception:  # pylint: disable=broad-exception-caught
+                    logger.warning(
+                        "sync_runner: failed to record run stats", exc_info=True
+                    )
 
 
 __all__ = ["trigger_sync"]
