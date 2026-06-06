@@ -21,6 +21,13 @@ function tsLabel(ts) {
   return new Date(Number(ts) * 1000).toLocaleString();
 }
 
+function failureDatasets(points) {
+  return FAILURE_REASONS.map((reason) => ({
+    label: reason,
+    data: points.map((p) => p.failures?.[reason] ?? 0),
+  }));
+}
+
 document.addEventListener("alpine:init", () => {
   Alpine.data("statsPage", () => ({
     range: RANGE_DEFAULT,
@@ -105,7 +112,7 @@ document.addEventListener("alpine:init", () => {
       if (this.charts[name]) {
         this.charts[name].destroy();
       }
-      this.charts[name] = new window.Chart(this.canvas(name), config);
+      this.charts[name] = new globalThis.Chart(this.canvas(name), config);
     },
 
     drawLine(name, labels, values, label) {
@@ -125,13 +132,9 @@ document.addEventListener("alpine:init", () => {
     },
 
     drawFailures(name, labels, points) {
-      const datasets = FAILURE_REASONS.map((reason) => ({
-        label: reason,
-        data: points.map((p) => p.failures?.[reason] ?? 0),
-      }));
       this.upsert(name, {
         type: "bar",
-        data: { labels: labels, datasets: datasets },
+        data: { labels: labels, datasets: failureDatasets(points) },
         options: { responsive: true, scales: { x: { stacked: true }, y: { stacked: true } } },
       });
     },
