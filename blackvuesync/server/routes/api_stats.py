@@ -53,6 +53,7 @@ def _point(row: RunRow) -> dict[str, object]:
         "disk": row.disk_used_ratio,
         "success": row.success,
         "failures": row.failures,
+        "dry_run": row.dry_run,
     }
 
 

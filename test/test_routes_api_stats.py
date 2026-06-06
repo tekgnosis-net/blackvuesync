@@ -73,6 +73,7 @@ def test_series_returns_summary_series_forecast(app_and_client: Any) -> None:
     assert body["range"] == "all"
     assert body["summary"]["runs"] == 5
     assert len(body["series"]["points"]) == 5
+    assert all("dry_run" in p for p in body["series"]["points"])
     assert "forecast" in body
     assert body["forecast"]["limits"]["max_used_disk_percent"] == pytest.approx(0.9)
 

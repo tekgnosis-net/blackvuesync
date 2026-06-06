@@ -87,8 +87,11 @@ document.addEventListener("alpine:init", () => {
     renderCharts(data) {
       const points = data.series.points;
       const labels = points.map((p) => tsLabel(p.ts));
-      this.drawLine("bytes", labels, points.map((p) => p.bytes), "Bytes");
-      this.drawBar("files", labels, points.map((p) => p.files), "Files");
+      // volume charts exclude dry-run rows (they download nothing)
+      const volume = points.filter((p) => !p.dry_run);
+      const volumeLabels = volume.map((p) => tsLabel(p.ts));
+      this.drawLine("bytes", volumeLabels, volume.map((p) => p.bytes), "Bytes");
+      this.drawBar("files", volumeLabels, volume.map((p) => p.files), "Files");
       this.drawLine("duration", labels, points.map((p) => p.duration), "Seconds");
       this.drawFailures("failures", labels, points);
       this.drawDisk("disk", points, data.forecast);
