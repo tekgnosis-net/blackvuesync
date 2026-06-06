@@ -163,7 +163,16 @@ document.addEventListener("alpine:init", () => {
       this.upsert(name, {
         type: "line",
         data: { labels: labels, datasets: datasets },
-        options: { responsive: true, scales: { y: { min: 0, max: 1 } } },
+        options: {
+          responsive: true,
+          scales: {
+            y: {
+              min: 0,
+              max: 1,
+              ticks: { callback: (value) => Math.round(value * 100) + "%" },
+            },
+          },
+        },
       });
     },
 
