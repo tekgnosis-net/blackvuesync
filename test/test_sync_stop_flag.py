@@ -78,7 +78,13 @@ class TestTriggerSyncClearsStopFlag:
         observed: list[bool] = []
         thread_done = threading.Event()
 
-        def _capture(_s: object, p: ProgressPublisher, *, job_id: str) -> None:
+        def _capture(
+            _s: object,
+            p: ProgressPublisher,
+            *,
+            job_id: str,
+            stats_store: object = None,  # noqa: ARG001
+        ) -> None:
             """captures the flag value the thread sees; signals via Event."""
             observed.append(is_stop_requested())
             p.begin_job(0, job_id=job_id)
