@@ -121,9 +121,12 @@ def stats() -> str:
 @bp.route("/viewer", methods=["GET"])
 @login_required
 def viewer() -> str:
-    """renders the dashcam viewer placeholder page."""
+    """renders the dashcam viewer; recordings + telemetry hydrate client-side."""
+    viewer_settings = current_app.settings_store.get().viewer  # type: ignore[attr-defined]
     return render_template(
-        "_placeholders/viewer.html",
+        "viewer.html",
         version=__version__,
         page="viewer",
+        journey_mode=viewer_settings.journey_mode,
+        speed_unit=viewer_settings.speed_unit,
     )

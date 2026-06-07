@@ -103,3 +103,13 @@ def test_gps_404_when_recording_has_no_gps(client_and_dest: Any) -> None:
     client, _ = client_and_dest
     # 20260607_101600_N exists (mp4) but has no .gps sidecar
     assert client.get("/api/viewer/recordings/20260607_101600_N/gps").status_code == 404
+
+
+def test_viewer_page_renders(client_and_dest: Any) -> None:
+    client, _ = client_and_dest
+    resp = client.get("/viewer")
+    assert resp.status_code == 200
+    assert b"js/viewer.js" in resp.data
+    assert b"js/leaflet.js" in resp.data
+    assert b'id="viewer-app"' in resp.data
+    assert b"data-journey-mode" in resp.data
