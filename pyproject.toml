@@ -150,7 +150,7 @@ module = "features.mock_dashcam.server"
 warn_return_any = false
 
 [[tool.mypy.overrides]]
-module = ["test_auth", "test_routes_auth", "test_routes_health", "test_routes_ui", "test_security_headers", "test_sync_callback", "test_sync_runner", "test_routes_api_sync", "test_routes_hx_sync", "test_scheduler", "test_routes_api_settings", "test_routes_api_auth", "test_main_serve_logging", "test_routes_api_health", "test_routes_api_recordings", "test_routes_api_schedule", "test_routes_hx_dashboard", "test_sync_stop_flag", "test_scheduler_pause", "test_routes_api_dashcam", "test_dashboard_render", "test_sync_resume", "test_clean_destination", "test_logging_on_change", "test_dashboard_sse_handoff", "test_settings_form", "test_settings_page", "test_routes_api_logs", "test_routes_api_stats"]
+module = ["test_auth", "test_routes_auth", "test_routes_health", "test_routes_ui", "test_security_headers", "test_sync_callback", "test_sync_runner", "test_routes_api_sync", "test_routes_hx_sync", "test_scheduler", "test_routes_api_settings", "test_routes_api_auth", "test_main_serve_logging", "test_routes_api_health", "test_routes_api_recordings", "test_routes_api_schedule", "test_routes_hx_dashboard", "test_sync_stop_flag", "test_scheduler_pause", "test_routes_api_dashcam", "test_dashboard_render", "test_sync_resume", "test_clean_destination", "test_logging_on_change", "test_dashboard_sse_handoff", "test_settings_form", "test_settings_page", "test_routes_api_logs", "test_routes_api_stats", "test_routes_media"]
 disallow_untyped_decorators = false
 
 [[tool.mypy.overrides]]
