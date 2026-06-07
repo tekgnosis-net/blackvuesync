@@ -22,6 +22,9 @@ def client_and_dest(tmp_path: Path):  # type: ignore[no-untyped-def]
     (dest / "20260607_101500_NF.mp4").write_bytes(b"video-bytes-here")
     (dest / "20260607_101500_NF.thm").write_bytes(b"\xff\xd8\xff\xe0jpeg")
     (dest / "secret.json").write_text("{}")
+    sub = dest / "2026-06-07"
+    sub.mkdir()
+    (sub / "20260607_101500_NF.mp4").write_bytes(b"nested-video")
     with patch.dict(os.environ, {"ADDRESS": "1.2.3.4"}, clear=False):
         store = SettingsStore(tmp_path / "settings.json")
     store.update(
@@ -78,3 +81,18 @@ def test_requires_login(client_and_dest: Any) -> None:
         anon = create_app(SettingsStore(dest.parent / "settings.json"), testing=True)
     resp = anon.test_client().get("/media/20260607_101500_NF.mp4")
     assert resp.status_code in (302, 401)
+
+
+def test_serves_file_in_grouping_subdir(client_and_dest: Any) -> None:
+    client, _ = client_and_dest
+    resp = client.get("/media/2026-06-07/20260607_101500_NF.mp4")
+    assert resp.status_code == 200
+    assert resp.data == b"nested-video"
+
+
+def test_symlink_escape_rejected(client_and_dest: Any) -> None:
+    client, dest = client_and_dest
+    outside = dest.parent / "outside.mp4"
+    outside.write_bytes(b"SECRET")
+    (dest / "evil.mp4").symlink_to(outside)
+    assert client.get("/media/evil.mp4").status_code == 404
