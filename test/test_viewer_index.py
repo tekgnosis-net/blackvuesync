@@ -63,3 +63,35 @@ def test_journey_chain_links_contiguous_same_type_only() -> None:
         "20260607_101600",
         "20260607_101700",
     ]
+
+
+def test_journey_chain_start_not_found_returns_empty() -> None:
+    import datetime
+
+    dt = datetime.datetime(2026, 6, 7, 10, 15, 0)
+    e = RecordingEntry("20260607_101500", "N", dt, ("F",), False, False, False, "")
+    assert journey_chain([e], "20260607_999999", "N") == []
+
+
+def test_journey_chain_gap_boundary_inclusive_at_120s() -> None:
+    import datetime
+
+    base = datetime.datetime(2026, 6, 7, 10, 15, 0)
+
+    def at(seconds: int) -> RecordingEntry:
+        return RecordingEntry(
+            f"ts_{seconds}",
+            "N",
+            base + datetime.timedelta(seconds=seconds),
+            ("F",),
+            False,
+            False,
+            False,
+            "",
+        )
+
+    # ts_120 is exactly at the 120-second boundary from ts_0 -- included.
+    # ts_241 is 121 seconds after ts_120 -- exceeds the gap window, breaks the
+    # chain.
+    chain = journey_chain([at(0), at(120), at(241)], "ts_0", "N")
+    assert [e.base_filename for e in chain] == ["ts_0", "ts_120"]

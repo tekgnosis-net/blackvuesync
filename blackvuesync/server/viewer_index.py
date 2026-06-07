@@ -87,7 +87,7 @@ def list_recordings(destination: str, grouping: str) -> list[RecordingEntry]:
         _build_entry(rel_dir, base, rtype, slot, present)
         for (rel_dir, base, rtype), slot in grouped.items()
     ]
-    entries.sort(key=lambda e: e.datetime, reverse=True)
+    entries.sort(key=lambda e: (e.datetime, e.base_filename, e.rel_dir), reverse=True)
     return entries
 
 
