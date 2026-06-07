@@ -88,3 +88,18 @@ def test_requires_login(client_and_dest: Any) -> None:
     with patch.dict(os.environ, {"ADDRESS": "1.2.3.4"}, clear=False):
         anon = create_app(SettingsStore(dest.parent / "s2.json"), testing=True)
     assert anon.test_client().get("/api/viewer/recordings").status_code in (302, 401)
+
+
+def test_unknown_key_returns_404(client_and_dest: Any) -> None:
+    client, _ = client_and_dest
+    assert (
+        client.get("/api/viewer/recordings/99999999_000000_N/journey").status_code
+        == 404
+    )
+    assert client.get("/api/viewer/recordings/99999999_000000_N/gps").status_code == 404
+
+
+def test_gps_404_when_recording_has_no_gps(client_and_dest: Any) -> None:
+    client, _ = client_and_dest
+    # 20260607_101600_N exists (mp4) but has no .gps sidecar
+    assert client.get("/api/viewer/recordings/20260607_101600_N/gps").status_code == 404

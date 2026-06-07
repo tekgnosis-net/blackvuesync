@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import os
 from pathlib import Path
 
 from flask import Blueprint, Response, abort, current_app
@@ -75,11 +74,14 @@ def _find(entries: list[RecordingEntry], key: str) -> RecordingEntry | None:
 
 
 def _sidecar_path(entry: RecordingEntry, suffix: str) -> Path:
-    settings = _settings()
+    """builds the sidecar path for a recording instant.
+
+    callers must have verified the matching `has_*` flag first; this does not
+    check existence (an absent file surfaces as OSError on the subsequent read).
+    """
+    base = Path(_settings().system.destination)
     rel = f"{entry.base_filename}_{entry.type}{suffix}"
-    if entry.rel_dir:
-        rel = os.path.join(entry.rel_dir, rel)
-    return Path(settings.system.destination) / rel
+    return base / entry.rel_dir / rel if entry.rel_dir else base / rel
 
 
 @api_viewer_bp.route("/recordings", methods=["GET"])
@@ -118,6 +120,7 @@ def gps(key: str) -> Response:
     entry = _find(_all_entries(), key)
     if entry is None or not entry.has_gps:
         abort(404)
+    # file may have vanished since enumeration; an OSError (-> 500) is an acceptable, honest failure
     text = _sidecar_path(entry, ".gps").read_text(encoding="utf-8", errors="replace")
     points = [dataclasses.asdict(p) for p in parse_gps(text)]
     return Response(json.dumps({"points": points}), status=200, mimetype=_MIME_JSON)
@@ -130,6 +133,7 @@ def gsensor(key: str) -> Response:
     entry = _find(_all_entries(), key)
     if entry is None or not entry.has_3gf:
         abort(404)
+    # file may have vanished since enumeration; an OSError (-> 500) is an acceptable, honest failure
     data = _sidecar_path(entry, ".3gf").read_bytes()
     samples = [dataclasses.asdict(s) for s in parse_gsensor(data)]
     return Response(json.dumps({"samples": samples}), status=200, mimetype=_MIME_JSON)
