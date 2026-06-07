@@ -189,11 +189,150 @@ const viewer = {
       fmtTime(this.front.currentTime) + " / " + fmtTime(this.front.duration);
   },
 
-  initTelemetry() {},
-  resetTelemetry() {},
-  loadSegmentTelemetry() {},
-  onTick() {},
-  onSegmentEnded() {},
+  // --- telemetry state (part 2) ---
+  map: null,
+  pathLayer: null,
+  marker: null,
+  gsChart: null,
+  track: [], // accumulated {st: session-time s, lat, lon, speed} across the journey
+  gforce: [], // accumulated {st, mag} for the g-sensor chart
+  offsets: [], // per-segment duration (s); offsets[i] = duration of segment i
+
+  initTelemetry() {
+    const leaflet = globalThis.L;
+    this.map = leaflet.map("viewer-map");
+    leaflet
+      .tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: "© OpenStreetMap",
+      })
+      .addTo(this.map);
+    this.map.setView([0, 0], 2);
+    this.gsChart = new globalThis.Chart(document.getElementById("viewer-gsensor"), {
+      type: "line",
+      data: { labels: [], datasets: [{ label: "G", data: [], pointRadius: 0, borderColor: "#ff9f0a" }] },
+      options: {
+        responsive: true,
+        animation: false,
+        plugins: { legend: { display: false } },
+        scales: { x: { display: false } },
+      },
+    });
+  },
+
+  resetTelemetry() {
+    this.track = [];
+    this.gforce = [];
+    this.offsets = [];
+    if (this.pathLayer) {
+      this.pathLayer.remove();
+      this.pathLayer = null;
+    }
+    if (this.marker) {
+      this.marker.remove();
+      this.marker = null;
+    }
+  },
+
+  segmentOffset(i) {
+    // cumulative session time (s) at the start of segment i
+    let total = 0;
+    for (let k = 0; k < i; k += 1) {
+      total += this.offsets[k] || 0;
+    }
+    return total;
+  },
+
+  async loadSegmentTelemetry(seg, i) {
+    const key = seg.base_filename + "_" + seg.type;
+    const offset = this.segmentOffset(i);
+    if (seg.has_gps) {
+      const gps = await fetchJson("/api/viewer/recordings/" + key + "/gps");
+      for (const p of gps?.points ?? []) {
+        this.track.push({ st: offset + p.t, lat: p.lat, lon: p.lon, speed: p.speed });
+      }
+    }
+    if (seg.has_3gf) {
+      const gs = await fetchJson("/api/viewer/recordings/" + key + "/gsensor");
+      for (const s of gs?.samples ?? []) {
+        this.gforce.push({ st: offset + s.t, mag: Math.hypot(s.x, s.y, s.z) });
+      }
+    }
+    this.redrawTrack();
+    const recordDuration = () => {
+      this.offsets[i] = this.front.duration || 60;
+    };
+    if (this.front.readyState >= 1) {
+      recordDuration();
+    } else {
+      this.front.addEventListener("loadedmetadata", recordDuration, { once: true });
+    }
+    if (this.journeyMode === "full") {
+      this.prefetchRest(i);
+    }
+  },
+
+  async prefetchRest(fromIndex) {
+    // full mode: eagerly load the remaining chain's telemetry up front
+    for (let i = fromIndex + 1; i < this.chain.length; i += 1) {
+      this.offsets[i] = this.offsets[i] || 60;
+      await this.loadSegmentTelemetry(this.chain[i], i);
+    }
+  },
+
+  redrawTrack() {
+    const leaflet = globalThis.L;
+    const latlngs = this.track.filter((p) => p.lat != null).map((p) => [p.lat, p.lon]);
+    if (latlngs.length) {
+      if (this.pathLayer) {
+        this.pathLayer.remove();
+      }
+      this.pathLayer = leaflet.polyline(latlngs, { color: "#0a84ff", weight: 3 }).addTo(this.map);
+      this.map.fitBounds(this.pathLayer.getBounds(), { padding: [20, 20] });
+      if (!this.marker) {
+        this.marker = leaflet
+          .circleMarker(latlngs[0], { radius: 6, color: "#fff", fillColor: "#0a84ff", fillOpacity: 1 })
+          .addTo(this.map);
+      }
+    }
+    this.gsChart.data.labels = this.gforce.map(() => "");
+    this.gsChart.data.datasets[0].data = this.gforce.map((g) => g.mag);
+    this.gsChart.update("none");
+  },
+
+  nearest(sessionTime) {
+    // nearest accumulated track point to a session time (linear scan; tracks are small)
+    let best = null;
+    let bestDelta = Infinity;
+    for (const p of this.track) {
+      const delta = Math.abs(p.st - sessionTime);
+      if (delta < bestDelta) {
+        bestDelta = delta;
+        best = p;
+      }
+    }
+    return best;
+  },
+
+  onTick() {
+    const sessionTime = this.segmentOffset(this.index) + this.front.currentTime;
+    const point = this.nearest(sessionTime);
+    if (point && this.marker) {
+      this.marker.setLatLng([point.lat, point.lon]);
+    }
+    if (point) {
+      const knots = point.speed ?? 0;
+      const factor = this.speedUnit === "mph" ? MPH_PER_KNOT : KMH_PER_KNOT;
+      document.getElementById("viewer-speed-value").textContent = String(Math.round(knots * factor));
+    }
+  },
+
+  onSegmentEnded() {
+    const next = this.index + 1;
+    if (next < this.chain.length) {
+      this.loadSegment(next, true);
+    }
+  },
 };
 
 document.addEventListener("DOMContentLoaded", () => viewer.init());
