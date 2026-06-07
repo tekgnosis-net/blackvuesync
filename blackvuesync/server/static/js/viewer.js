@@ -113,6 +113,9 @@ const viewer = {
     this.index = 0;
     this.resetTelemetry();
     await this.loadSegment(0, true);
+    if (this.journeyMode === "full") {
+      this.prefetchRest(0);
+    }
   },
 
   async loadSegment(i, autoplay) {
@@ -197,6 +200,7 @@ const viewer = {
   track: [], // accumulated {st: session-time s, lat, lon, speed} across the journey
   gforce: [], // accumulated {st, mag} for the g-sensor chart
   offsets: [], // per-segment duration (s); offsets[i] = duration of segment i
+  loaded: null, // Set of chain indices whose telemetry has been appended (idempotency)
 
   initTelemetry() {
     const leaflet = globalThis.L;
@@ -224,6 +228,7 @@ const viewer = {
     this.track = [];
     this.gforce = [];
     this.offsets = [];
+    this.loaded = new Set();
     if (this.pathLayer) {
       this.pathLayer.remove();
       this.pathLayer = null;
@@ -244,38 +249,36 @@ const viewer = {
   },
 
   async loadSegmentTelemetry(seg, i) {
-    const key = seg.base_filename + "_" + seg.type;
+    if (this.loaded.has(i)) {
+      return; // this segment's telemetry is already accumulated
+    }
+    this.loaded.add(i);
+    const key = recordingKey(seg);
     const offset = this.segmentOffset(i);
+    let span = 0;
     if (seg.has_gps) {
       const gps = await fetchJson("/api/viewer/recordings/" + key + "/gps");
       for (const p of gps?.points ?? []) {
         this.track.push({ st: offset + p.t, lat: p.lat, lon: p.lon, speed: p.speed });
+        span = Math.max(span, p.t);
       }
     }
     if (seg.has_3gf) {
       const gs = await fetchJson("/api/viewer/recordings/" + key + "/gsensor");
       for (const s of gs?.samples ?? []) {
         this.gforce.push({ st: offset + s.t, mag: Math.hypot(s.x, s.y, s.z) });
+        span = Math.max(span, s.t);
       }
     }
+    // duration estimate (telemetry span) offsets the next segment on the journey timeline
+    this.offsets[i] = span || 60;
     this.redrawTrack();
-    const recordDuration = () => {
-      this.offsets[i] = this.front.duration || 60;
-    };
-    if (this.front.readyState >= 1) {
-      recordDuration();
-    } else {
-      this.front.addEventListener("loadedmetadata", recordDuration, { once: true });
-    }
-    if (this.journeyMode === "full") {
-      this.prefetchRest(i);
-    }
   },
 
   async prefetchRest(fromIndex) {
-    // full mode: eagerly load the remaining chain's telemetry up front
+    // full mode: load the remaining chain's telemetry up front (each call is
+    // idempotent via the `loaded` set, so this never double-appends).
     for (let i = fromIndex + 1; i < this.chain.length; i += 1) {
-      this.offsets[i] = this.offsets[i] || 60;
       await this.loadSegmentTelemetry(this.chain[i], i);
     }
   },
