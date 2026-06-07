@@ -611,6 +611,21 @@ old rows.
 
 ---
 
+## Viewer API
+
+Login required. See `docs/reference/blackvue-file-formats.md` for the underlying
+file formats. `viewer.journey_mode` / `viewer.speed_unit` settings tune the page.
+
+| Method | Path | Description |
+| --- | --- | --- |
+| GET | `/api/viewer/recordings` | recordings grouped by day, newest first |
+| GET | `/api/viewer/recordings/<base>_<type>/journey` | forward chain of contiguous segments |
+| GET | `/api/viewer/recordings/<base>_<type>/gps` | parsed GPS points `[{t, lat, lon, speed}]` |
+| GET | `/api/viewer/recordings/<base>_<type>/gsensor` | parsed G-sensor `[{t, x, y, z}]` |
+| GET | `/media/<path>` | path-safe `.mp4`/`.thm` serving (HTTP Range) |
+
+---
+
 ## Settings UI (Sub-Project #3)
 
 The `/settings` page added in Sub-Project #3 drives the existing
