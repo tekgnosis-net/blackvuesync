@@ -101,10 +101,12 @@ best-effort label.
 
 - Sample rate **≈ 10 Hz** (observed ~105 ms between samples; a ~60 s recording yields
   ~560 samples).
-- Axis values are raw `int16`. A stationary recording reads a near-constant vector
-  whose magnitude ≈ 1 g (gravity), implying a scale of **≈ raw / 128 -> g**. Confirm
-  the canonical divisor against `bartbroere/blackvue-acc` before relying on absolute
-  g-values; relative magnitude is reliable regardless.
+- Axis values are raw `int16`. **Scale: `raw / 128 = g`.** Confirmed by two
+  independent sources: a real DR-series parking recording (562 samples, mean
+  vector magnitude 1.025 g when stationary ≈ gravity) and
+  `bartbroere/blackvue-acc` (`blackvue_acc.py`: `/ 128  # 1G is assumed to be
+  128 as integer`). The implementation lives in
+  `blackvuesync/server/gsensor.py` (`SCALE_G = 128.0`).
 
 ## `.thm` -- thumbnail
 
