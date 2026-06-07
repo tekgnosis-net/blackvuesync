@@ -6,6 +6,7 @@
 const KMH_PER_KNOT = 1.852;
 const MPH_PER_KNOT = 1.15078;
 const DRIFT_TOLERANCE = 0.15; // seconds before re-pinning the slave video
+const RECORDINGS_API = "/api/viewer/recordings";
 
 function fmtTime(seconds) {
   const total = Math.floor(Number(seconds) || 0);
@@ -54,7 +55,7 @@ const viewer = {
   },
 
   async loadRecordings() {
-    const data = await fetchJson("/api/viewer/recordings");
+    const data = await fetchJson(RECORDINGS_API);
     const side = document.getElementById("viewer-recordings");
     side.replaceChildren();
     if (!data) {
@@ -106,7 +107,7 @@ const viewer = {
     const seq = (this._selectSeq = this._selectSeq + 1);
     this.markActive(recordingKey(rec));
     const journey = await fetchJson(
-      "/api/viewer/recordings/" + recordingKey(rec) + "/journey"
+      RECORDINGS_API + "/" + recordingKey(rec) + "/journey"
     );
     if (seq !== this._selectSeq) return; // a newer selection superseded this one
     this.chain = journey?.segments ?? [rec];
@@ -257,14 +258,14 @@ const viewer = {
     const offset = this.segmentOffset(i);
     let span = 0;
     if (seg.has_gps) {
-      const gps = await fetchJson("/api/viewer/recordings/" + key + "/gps");
+      const gps = await fetchJson(RECORDINGS_API + "/" + key + "/gps");
       for (const p of gps?.points ?? []) {
         this.track.push({ st: offset + p.t, lat: p.lat, lon: p.lon, speed: p.speed });
         span = Math.max(span, p.t);
       }
     }
     if (seg.has_3gf) {
-      const gs = await fetchJson("/api/viewer/recordings/" + key + "/gsensor");
+      const gs = await fetchJson(RECORDINGS_API + "/" + key + "/gsensor");
       for (const s of gs?.samples ?? []) {
         this.gforce.push({ st: offset + s.t, mag: Math.hypot(s.x, s.y, s.z) });
         span = Math.max(span, s.t);
