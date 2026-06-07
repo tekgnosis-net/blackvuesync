@@ -1042,3 +1042,36 @@ def test_stats_section_defaults_when_absent_from_file() -> None:
 
     settings = _settings_from_dict({"version": 1, "connection": {"address": "1.2.3.4"}})
     assert settings.stats.retention_days == 365
+
+
+# ---------------------------------------------------------------------------
+# viewer section
+# ---------------------------------------------------------------------------
+
+
+def test_viewer_section_defaults_and_validate() -> None:
+    from blackvuesync.settings import Settings, ViewerSettings
+
+    s = Settings()
+    assert isinstance(s.viewer, ViewerSettings)
+    assert s.viewer.journey_mode == "progressive"
+    assert s.viewer.speed_unit == "kmh"
+    assert ViewerSettings().validate() == []
+    assert ViewerSettings(journey_mode="bogus").validate() == [  # type: ignore[arg-type]
+        "viewer.journey_mode must be 'progressive' or 'full'"
+    ]
+    assert ViewerSettings(speed_unit="kn").validate() == [  # type: ignore[arg-type]
+        "viewer.speed_unit must be 'kmh' or 'mph'"
+    ]
+
+
+def test_viewer_section_roundtrips_and_defaults_when_absent() -> None:
+    import dataclasses
+
+    from blackvuesync.settings import Settings, _settings_from_dict, _settings_to_dict
+
+    s = Settings(viewer=dataclasses.replace(Settings().viewer, journey_mode="full"))
+    raw = _settings_to_dict(s)
+    assert raw["viewer"] == {"journey_mode": "full", "speed_unit": "kmh"}
+    assert _settings_from_dict(raw).viewer.journey_mode == "full"
+    assert _settings_from_dict({"version": 1}).viewer.journey_mode == "progressive"

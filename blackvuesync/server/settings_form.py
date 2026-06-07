@@ -127,6 +127,17 @@ SECTION_FIELD_SPECS: dict[str, tuple[FieldSpec, ...]] = {
             help="prune run history older than this; 0 keeps all",
         ),
     ),
+    "viewer": (
+        FieldSpec(
+            "journey_mode",
+            "Journey accumulation",
+            "select",
+            "text",
+            options=("progressive", "full"),
+            help="progressive grows the map as you watch; full plots the whole route up front",
+        ),
+        FieldSpec("speed_unit", "Speed unit", "select", "text", options=("kmh", "mph")),
+    ),
     "web": (
         FieldSpec("port", "Port", "number", "number"),
         FieldSpec(
@@ -164,6 +175,7 @@ SECTION_LABELS: dict[str, str] = {
     "logging": "Logging",
     "metrics": "Metrics",
     "stats": "Statistics",
+    "viewer": "Viewer",
     "web": "Web",
     "auth": "Auth",
     "system": "System",

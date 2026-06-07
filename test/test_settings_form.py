@@ -74,6 +74,11 @@ def test_build_sections_pairs_values_and_tier() -> None:
             "_tier": "immediate",
         },
         "stats": {"retention_days": 365, "_tier": "next_tick"},
+        "viewer": {
+            "journey_mode": "progressive",
+            "speed_unit": "kmh",
+            "_tier": "immediate",
+        },
         "system": {"destination": "/recordings", "dry_run": False, "_tier": "restart"},
     }
     sections = build_sections(settings_dict)
@@ -115,3 +120,13 @@ def test_stats_section_has_retention_field() -> None:
     assert names == ["retention_days"]
     spec = SECTION_FIELD_SPECS["stats"][0]
     assert spec.widget == "number" and spec.data_type == "number"
+
+
+def test_viewer_section_has_two_select_fields() -> None:
+    from blackvuesync.server.settings_form import SECTION_FIELD_SPECS, SECTION_LABELS
+
+    assert SECTION_LABELS["viewer"] == "Viewer"
+    specs = {f.name: f for f in SECTION_FIELD_SPECS["viewer"]}
+    assert specs["journey_mode"].widget == "select"
+    assert specs["journey_mode"].options == ("progressive", "full")
+    assert specs["speed_unit"].options == ("kmh", "mph")
