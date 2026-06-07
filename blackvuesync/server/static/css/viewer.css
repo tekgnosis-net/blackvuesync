@@ -10,6 +10,8 @@
 .viewer-player[data-layout="pip"] .viewer-video-secondary { position: absolute; right: 10px; bottom: 10px; width: 28%; border: 2px solid #fff; border-radius: 5px; }
 .viewer-player[data-layout="sbs"] { display: grid; grid-template-columns: 1fr 1fr; aspect-ratio: auto; }
 .viewer-player[data-layout="sbs"] .viewer-video { width: 100%; height: 100%; object-fit: contain; position: static; }
+.viewer-player[data-layout="sbs"] .viewer-video-primary { order: 0; }
+.viewer-player[data-layout="sbs"] .viewer-video-secondary { order: 1; }
 .viewer-transport { display: flex; align-items: center; gap: 8px; margin: 10px 0; }
 .viewer-seek { flex: 1; }
 .viewer-btn { border: 1px solid var(--color-separator, #d1d1d6); background: var(--color-surface, #fff); border-radius: 8px; padding: 4px 10px; font-size: 13px; cursor: pointer; }

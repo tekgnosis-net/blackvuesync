@@ -37,6 +37,7 @@ const viewer = {
   journeyMode: "progressive",
   chain: [],
   index: 0,
+  _selectSeq: 0,
 
   init() {
     this.el = document.getElementById("viewer-app");
@@ -45,7 +46,7 @@ const viewer = {
     this.rear = document.getElementById("viewer-rear");
     this.player = this.el.querySelector(".viewer-player");
     this.speedUnit = this.el.dataset.speedUnit || "kmh";
-    this.journeyMode = this.el.dataset.journeyMode || "progressive";
+    this.journeyMode = this.el.dataset.journeyMode || "progressive"; // consumed in part 2 (progressive vs full telemetry loading)
     this.bindTransport();
     this.bindSync();
     this.loadRecordings();
@@ -56,7 +57,13 @@ const viewer = {
     const data = await fetchJson("/api/viewer/recordings");
     const side = document.getElementById("viewer-recordings");
     side.replaceChildren();
-    if (!data) return;
+    if (!data) {
+      const note = document.createElement("p");
+      note.className = "viewer-note";
+      note.textContent = "Could not load recordings.";
+      side.append(note);
+      return;
+    }
     for (const day of data.days) {
       const label = document.createElement("div");
       label.className = "viewer-day-label";
@@ -96,8 +103,12 @@ const viewer = {
   },
 
   async selectRecording(rec) {
+    const seq = (this._selectSeq = this._selectSeq + 1);
     this.markActive(recordingKey(rec));
-    const journey = await fetchJson("/api/viewer/recordings/" + recordingKey(rec) + "/journey");
+    const journey = await fetchJson(
+      "/api/viewer/recordings/" + recordingKey(rec) + "/journey"
+    );
+    if (seq !== this._selectSeq) return; // a newer selection superseded this one
     this.chain = journey?.segments ?? [rec];
     this.index = 0;
     this.resetTelemetry();
