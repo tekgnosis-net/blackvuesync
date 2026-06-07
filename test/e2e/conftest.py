@@ -50,6 +50,7 @@ def live_server(tmp_path: Path):  # type: ignore[no-untyped-def]
     server = _LiveServer(app, "127.0.0.1", 0)
     # make_server with port 0 picks a free port; read it back
     server.url = f"http://127.0.0.1:{server._srv.server_port}"
+    server.destination = destination
     server.start()
     yield server
     server.stop()

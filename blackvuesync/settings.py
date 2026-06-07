@@ -221,6 +221,25 @@ class StatsSettings:
 
 
 @dataclass(frozen=True)
+class ViewerSettings:
+    """dashcam viewer settings."""
+
+    TIER: ClassVar[PropagationTier] = "immediate"
+
+    journey_mode: Literal["progressive", "full"] = "progressive"
+    speed_unit: Literal["kmh", "mph"] = "kmh"
+
+    def validate(self) -> list[str]:
+        """validates viewer settings; returns a list of error strings."""
+        errors: list[str] = []
+        if self.journey_mode not in ("progressive", "full"):
+            errors.append("viewer.journey_mode must be 'progressive' or 'full'")
+        if self.speed_unit not in ("kmh", "mph"):
+            errors.append("viewer.speed_unit must be 'kmh' or 'mph'")
+        return errors
+
+
+@dataclass(frozen=True)
 class WebSettings:
     """web server settings."""
 
@@ -306,6 +325,7 @@ class Settings:  # pylint: disable=too-many-instance-attributes
     logging: LoggingSettings = field(default_factory=LoggingSettings)
     metrics: MetricsSettings = field(default_factory=MetricsSettings)
     stats: StatsSettings = field(default_factory=StatsSettings)
+    viewer: ViewerSettings = field(default_factory=ViewerSettings)
     web: WebSettings = field(default_factory=WebSettings)
     auth: AuthSettings = field(default_factory=AuthSettings)
     system: SystemSettings = field(default_factory=SystemSettings)
@@ -320,6 +340,7 @@ class Settings:  # pylint: disable=too-many-instance-attributes
         errors.extend(self.logging.validate())
         errors.extend(self.metrics.validate())
         errors.extend(self.stats.validate())
+        errors.extend(self.viewer.validate())
         errors.extend(self.web.validate())
         errors.extend(self.auth.validate())
         errors.extend(self.system.validate())
@@ -339,6 +360,7 @@ _SECTION_FIELDS: dict[str, type] = {
     "logging": LoggingSettings,
     "metrics": MetricsSettings,
     "stats": StatsSettings,
+    "viewer": ViewerSettings,
     "web": WebSettings,
     "auth": AuthSettings,
     "system": SystemSettings,
@@ -599,6 +621,8 @@ class SettingsStore:
             retention_days=int(_env("STATS_RETENTION_DAYS", "365")),
         )
 
+        viewer = ViewerSettings()
+
         web = WebSettings(
             port=int(_env("BLACKVUESYNC_PORT", "8080")),
         )
@@ -624,6 +648,7 @@ class SettingsStore:
             logging=log_settings,
             metrics=metrics,
             stats=stats,
+            viewer=viewer,
             web=web,
             auth=auth,
         )

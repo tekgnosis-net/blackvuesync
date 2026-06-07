@@ -16,7 +16,7 @@ from blackvuesync.server.stats_store import StatsStore
 from blackvuesync.settings import SettingsStore
 
 
-def create_app(  # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments
+def create_app(  # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments,too-many-statements
     settings_store: SettingsStore,
     testing: bool = False,
     progress_publisher: Optional[ProgressPublisher] = None,
@@ -88,10 +88,12 @@ def create_app(  # pylint: disable=too-many-locals,too-many-arguments,too-many-p
     from blackvuesync.server.routes.api_settings import api_settings_bp
     from blackvuesync.server.routes.api_stats import api_stats_bp
     from blackvuesync.server.routes.api_sync import api_sync_bp
+    from blackvuesync.server.routes.api_viewer import api_viewer_bp
     from blackvuesync.server.routes.auth import bp as auth_bp
     from blackvuesync.server.routes.health import bp as health_bp
     from blackvuesync.server.routes.hx_dashboard import hx_dashboard_bp
     from blackvuesync.server.routes.hx_sync import hx_sync_bp
+    from blackvuesync.server.routes.media import media_bp
     from blackvuesync.server.routes.ui import bp as ui_bp
 
     # pylint: enable=import-outside-toplevel
@@ -108,8 +110,10 @@ def create_app(  # pylint: disable=too-many-locals,too-many-arguments,too-many-p
     app.register_blueprint(api_sync_bp)
     app.register_blueprint(api_logs_bp)
     app.register_blueprint(api_stats_bp)
+    app.register_blueprint(api_viewer_bp)
     app.register_blueprint(hx_dashboard_bp)
     app.register_blueprint(hx_sync_bp)
+    app.register_blueprint(media_bp)
 
     @app.after_request
     def add_security_headers(response: Response) -> Response:
