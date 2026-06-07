@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import dataclasses
 import re
-from decimal import Decimal
 
 # [epoch-ms] + $ + G + any talker letter + RMC|GGA + comma + the field body.
 _SENTENCE_RE = re.compile(
@@ -28,17 +27,13 @@ class GpsPoint:
 
 
 def _dm_to_decimal(value: str, hemisphere: str) -> float | None:
-    """converts a DDMM.mmmmm / DDDMM.mmmmm + hemisphere string to decimal degrees.
-
-    uses Decimal arithmetic to avoid catastrophic cancellation when splitting
-    degrees from minutes (e.g. 3348.1 - 3300 loses precision as float).
-    """
+    """converts a DDMM.mmmmm / DDDMM.mmmmm + hemisphere string to decimal degrees."""
     if not value:
         return None
-    raw = Decimal(value)
+    raw = float(value)
     degrees = int(raw // 100)
     minutes = raw - degrees * 100
-    decimal = float(degrees + minutes / 60)
+    decimal = degrees + minutes / 60.0
     return -decimal if hemisphere in ("S", "W") else decimal
 
 
@@ -78,15 +73,18 @@ def parse_gps(text: str) -> list[GpsPoint]:
     for match in _SENTENCE_RE.finditer(text):
         ms = int(match.group("ms"))
         fields = match.group("fields").split(",")
-        if match.group("kind") == "RMC":
-            parsed = _parse_rmc(fields)
-            if parsed is not None:
-                by_ms[ms] = parsed
-                rmc_ms.add(ms)
-        elif ms not in rmc_ms:  # GGA only fills positions without an RMC
-            parsed = _parse_gga(fields)
-            if parsed is not None:
-                by_ms[ms] = parsed
+        try:
+            if match.group("kind") == "RMC":
+                parsed = _parse_rmc(fields)
+                if parsed is not None:
+                    by_ms[ms] = parsed
+                    rmc_ms.add(ms)
+            elif ms not in rmc_ms:  # GGA only fills positions without an RMC
+                parsed = _parse_gga(fields)
+                if parsed is not None:
+                    by_ms[ms] = parsed
+        except ValueError:
+            continue  # one malformed sentence does not abort the whole parse
     if not by_ms:
         return []
     first_ms = min(by_ms)

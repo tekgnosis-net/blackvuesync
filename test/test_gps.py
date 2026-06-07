@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from blackvuesync.server.gps import GpsPoint, parse_gps
 
 # synthetic, anonymized -- matches the real $GN framing (NOT $GP) and the
@@ -24,10 +26,10 @@ def test_parses_rmc_points_with_elapsed_time_and_decimal_coords() -> None:
     assert isinstance(points[0], GpsPoint)
     assert points[0].t == 0.0
     assert points[1].t == 1.0
-    assert points[0].lat == -(33 + 48.1 / 60)
-    assert points[0].lon == 151 + 1.1 / 60
-    assert points[1].lat == 33 + 48.2 / 60
-    assert points[1].lon == -(151 + 1.2 / 60)
+    assert points[0].lat == pytest.approx(-(33 + 48.1 / 60))
+    assert points[0].lon == pytest.approx(151 + 1.1 / 60)
+    assert points[1].lat == pytest.approx(33 + 48.2 / 60)
+    assert points[1].lon == pytest.approx(-(151 + 1.2 / 60))
     assert points[0].speed == 0.0
     assert points[1].speed == 12.34
 
@@ -40,9 +42,19 @@ def test_falls_back_to_gga_when_no_rmc() -> None:
     points = parse_gps(_GGA_ONLY)
     assert len(points) == 1
     assert points[0].speed is None
-    assert points[0].lat == 12 + 34.5 / 60
+    assert points[0].lat == pytest.approx(12 + 34.5 / 60)
 
 
 def test_empty_and_garbage_tolerated() -> None:
     assert parse_gps("") == []
     assert parse_gps("not nmea\n[bad]\n\n") == []
+
+
+def test_malformed_numeric_field_is_skipped_not_fatal() -> None:
+    text = (
+        "[1000]$GNRMC,055056.00,A,BAD,N,XXXX,E,0.0,,070626,,,A*00\r\n"
+        "[2000]$GNRMC,055057.00,A,3348.20000,N,15101.20000,E,1.0,,070626,,,A*00\r\n"
+    )
+    points = parse_gps(text)
+    assert len(points) == 1  # the malformed sentence is skipped; the good one parses
+    assert points[0].t == 0.0  # the surviving sentence anchors elapsed time at 0
