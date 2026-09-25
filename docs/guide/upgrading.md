@@ -49,10 +49,15 @@ Keep the same `-v ...:/config` mount so the settings carry over.
 ## pip / uv
 
 ```sh
-~/blackvuesync-venv/bin/pip install --upgrade blackvuesync
+~/blackvuesync-venv/bin/pip install --force-reinstall --no-deps "git+https://github.com/tekgnosis-net/blackvuesync"
 # or
-uv tool upgrade blackvuesync
+uv tool install --reinstall "git+https://github.com/tekgnosis-net/blackvuesync"
 ```
+
+The version number does not change on every commit, so
+`pip install --upgrade` and `uv tool upgrade` can report that everything is
+up to date and keep the old code. The commands above always fetch the latest
+commit.
 
 Restart the `serve` process afterwards.
 
@@ -134,8 +139,9 @@ docker run --rm -v /data/dashcam:/recordings \
 
 ### Plain cron installs
 
-If you run `blackvuesync` from the host's crontab, upgrading the package
-changes nothing about that: `blackvuesync <address> ...` still runs one sync
+If you run `blackvuesync` from the host's crontab and installed it from PyPI,
+you have the upstream package; `pip install "git+https://github.com/tekgnosis-net/blackvuesync"` replaces it with this
+fork. Either way, upgrading changes nothing about the cron job: `blackvuesync <address> ...` still runs one sync
 with the same flags. The web service is only started by `blackvuesync serve`.
 Do not run cron syncs and `serve` against the same destination at the same
 time; the lock file makes one of them skip, but the web UI will not show cron

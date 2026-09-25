@@ -9,8 +9,56 @@ BlackVue dashcams expose an HTTP server that can be used to download all recordi
 
 A typical setup would be a periodic cron job or a Docker container running on a local server.
 
-The long-running web service started shipping in 2.3.0; older releases run
-the cron-era CLI.
+## About this fork
+
+BlackVue Sync was created by [Alessandro Colomba](https://github.com/acolomba)
+and is developed at [acolomba/blackvuesync](https://github.com/acolomba/blackvuesync).
+This repository is a fork of that project. Many thanks to Alessandro for
+writing and maintaining BlackVue Sync since 2018, and to the upstream
+contributors. The sync engine this fork runs on is their work: filename
+parsing, the download loop, retention, locking, cron mode, structured logs and
+Prometheus metrics.
+
+The fork branched from upstream in May 2026 (upstream commit `7871a77`) and
+has diverged since. Upstream changes made after that point are not included
+here.
+
+### What this fork adds
+
+These ship from version 2.3.0 onward; see the [CHANGELOG](CHANGELOG.md).
+
+* **Web service** (`blackvuesync serve`, the Docker default): runs syncs on a
+  cron schedule inside one long-running process instead of an external cron
+  job.
+* **Authentication**: password login (Argon2id) with a first-run setup page,
+  login handled by a reverse proxy, or none for trusted networks.
+* **Dashboard**: live per-file progress, Sync now, Stop, and Pause/Resume of
+  the schedule, plus storage, dashcam and recent-activity cards.
+* **Settings editor**: all configuration lives in `/config/settings.json` and
+  is edited in the browser. Environment variables only seed it on first start.
+* **Log viewer**: live tail with level filtering and adjustable verbosity.
+* **Statistics**: per-run history (bytes, files, duration, success rate) and a
+  disk-usage forecast.
+* **Recording viewer**: front and rear playback with the GPS track on a map, a
+  G-sensor chart, and auto-advance through a journey.
+* **Dashcam info**: read-only firmware and configuration details.
+* **Byte-level download resume** with HTTP range requests: an interrupted file
+  continues where it stopped instead of starting over.
+* **Docker packaging**: `/config` volume, health check, and a multi-stage
+  image for amd64 and arm64.
+* **User guides** for installation, configuration, upgrading and
+  troubleshooting.
+
+The command line is unchanged: `blackvuesync <address> ...` behaves as it does
+upstream, and recordings are stored with the same names and layout, so an
+existing download directory can be used as is. Moving from the upstream Docker
+image is covered in
+[Upgrading](docs/guide/upgrading.md#migrating-from-the-cron-era-image-22x-and-earlier).
+
+Report problems with this fork (web UI, `serve`, the
+`ghcr.io/tekgnosis-net/blackvuesync` image) at
+[tekgnosis-net/blackvuesync issues](https://github.com/tekgnosis-net/blackvuesync/issues),
+not upstream.
 
 ## Documentation
 
@@ -90,12 +138,16 @@ Another way is by browsing to: `http://dashcam.example.net/blackvue_vod.cgi`.
 
 BlackVue Sync can be obtained in a number of ways:
 
-* **[uv](https://docs.astral.sh/uv/)**: Run with `uvx blackvuesync <args>`, or install with `uv tool install blackvuesync` and run with `blackvuesync <args>`.
-* **[Pip](https://pypi.org/project/pip/):** Install with `pip install blackvuesync` and run with `blackvuesync <args>`.
+* **[uv](https://docs.astral.sh/uv/)**: Run with `uvx --from git+https://github.com/tekgnosis-net/blackvuesync blackvuesync <args>`, or install with `uv tool install git+https://github.com/tekgnosis-net/blackvuesync` and run with `blackvuesync <args>`.
+* **[Pip](https://pypi.org/project/pip/):** Install with `pip install "git+https://github.com/tekgnosis-net/blackvuesync"` and run with `blackvuesync <args>`.
 * **From source:** Clone the repository and run `python3 -m blackvuesync <args>`.
 * **GHCR:** The [Docker image](https://github.com/tekgnosis-net/blackvuesync/pkgs/container/blackvuesync) can be pulled with `docker pull ghcr.io/tekgnosis-net/blackvuesync`.
 
 The interactive instructions assume a uv or Pip installation.
+
+The `blackvuesync` package on PyPI (`pip install blackvuesync`,
+`uvx blackvuesync`) is the upstream project, version 2.2.0. It does not include
+this fork's web service; install from the Git URL above to get it.
 
 ### Manual Usage
 
@@ -477,3 +529,6 @@ toggle on the Settings page (System section), or run a one-off
 This project is licensed under the MIT License - see the [COPYING](COPYING) file for details
 
 Copyright 2018-2026 [Alessandro Colomba](https://github.com/acolomba)
+
+Fork additions copyright 2026 [tekgnosis-net](https://github.com/tekgnosis-net),
+under the same MIT license.

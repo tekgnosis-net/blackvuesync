@@ -122,8 +122,11 @@ Requires Python 3.9 or newer.
 
 ```sh
 python3 -m venv ~/blackvuesync-venv
-~/blackvuesync-venv/bin/pip install blackvuesync
+~/blackvuesync-venv/bin/pip install "git+https://github.com/tekgnosis-net/blackvuesync"
 ```
+
+Install from the Git URL. The `blackvuesync` package on PyPI is the upstream
+project (version 2.2.0) and has no `serve` command.
 
 Run the web service with a config directory of your choice:
 
