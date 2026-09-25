@@ -14,9 +14,5 @@
         "features/steps/*.py"
     ],
     "cucumberautocomplete.strictGherkinCompletion": true,
-    "cucumberautocomplete.strictGherkinValidation": true,
-    "sonarlint.connectedMode.project": {
-        "connectionId": "tekgnosis-net",
-        "projectKey": "tekgnosis-net_blackvuesync"
-    }
+    "cucumberautocomplete.strictGherkinValidation": true
 }

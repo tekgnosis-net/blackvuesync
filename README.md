@@ -2,13 +2,6 @@
 
 [![CI](https://github.com/tekgnosis-net/blackvuesync/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/tekgnosis-net/blackvuesync/actions/workflows/ci.yml)
 [![Build Docker image](https://github.com/tekgnosis-net/blackvuesync/actions/workflows/docker-build.yml/badge.svg?branch=main)](https://github.com/tekgnosis-net/blackvuesync/actions/workflows/docker-build.yml)
-[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=tekgnosis-net_blackvuesync&metric=alert_status)](https://sonarcloud.io/summary/overall?id=tekgnosis-net_blackvuesync)
-[![Coverage](https://sonarcloud.io/api/project_badges/measure?project=tekgnosis-net_blackvuesync&metric=coverage)](https://sonarcloud.io/summary/overall?id=tekgnosis-net_blackvuesync)
-[![Bugs](https://sonarcloud.io/api/project_badges/measure?project=tekgnosis-net_blackvuesync&metric=bugs)](https://sonarcloud.io/summary/overall?id=tekgnosis-net_blackvuesync)
-[![Code Smells](https://sonarcloud.io/api/project_badges/measure?project=tekgnosis-net_blackvuesync&metric=code_smells)](https://sonarcloud.io/summary/overall?id=tekgnosis-net_blackvuesync)
-[![Maintainability Rating](https://sonarcloud.io/api/project_badges/measure?project=tekgnosis-net_blackvuesync&metric=sqale_rating)](https://sonarcloud.io/summary/overall?id=tekgnosis-net_blackvuesync)
-[![Reliability Rating](https://sonarcloud.io/api/project_badges/measure?project=tekgnosis-net_blackvuesync&metric=reliability_rating)](https://sonarcloud.io/summary/overall?id=tekgnosis-net_blackvuesync)
-[![Security Rating](https://sonarcloud.io/api/project_badges/measure?project=tekgnosis-net_blackvuesync&metric=security_rating)](https://sonarcloud.io/summary/overall?id=tekgnosis-net_blackvuesync)
 
 Synchronizes recordings from a BlackVue dashcam with a local directory over a LAN.
 
