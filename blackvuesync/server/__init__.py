@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import logging
 import os
+import secrets
 from datetime import timedelta
 from typing import Optional
 
@@ -10,10 +12,12 @@ from flask import Flask, Response, request
 from flask_wtf.csrf import CSRFProtect
 from werkzeug.middleware.proxy_fix import ProxyFix
 
-from blackvuesync.server.log_buffer import LogBuffer
+from blackvuesync.server.log_buffer import BOOT_ID, LogBuffer
 from blackvuesync.server.progress import ProgressPublisher
 from blackvuesync.server.stats_store import StatsStore
-from blackvuesync.settings import SettingsStore
+from blackvuesync.settings import Settings, SettingsStore
+
+logger = logging.getLogger(__name__)
 
 
 def create_app(  # pylint: disable=too-many-locals,too-many-arguments,too-many-positional-arguments,too-many-statements
@@ -40,15 +44,28 @@ def create_app(  # pylint: disable=too-many-locals,too-many-arguments,too-many-p
     # absolute path of the rotating log file for the viewer to display; None
     # (rendered as "") when no file handler is configured (e.g. in tests).
     app.log_file_path = log_file_path  # type: ignore[attr-defined]
+    # lets the logs page detect a server restart (seq restarts per process).
+    app.jinja_env.globals["log_boot_id"] = BOOT_ID
     # attaches the stats store, or an empty in-memory store so route/page
     # handlers always have one even when serve mode did not supply it.
     app.stats_store = stats_store or StatsStore(":memory:")  # type: ignore[attr-defined]
 
     settings = settings_store.get()
-    secret = settings.auth.session_secret or "dev-insecure-placeholder"
+    secret = settings.auth.session_secret
+    if not secret:
+        if testing:
+            secret = "test-only-placeholder"
+        else:
+            # never signs sessions with a public constant; a per-process key
+            # means sessions do not survive a restart until a secret is stored.
+            logger.warning(
+                "auth.session_secret is empty; using a random per-process key"
+            )
+            secret = secrets.token_hex(32)
 
     # when deployed behind an https reverse proxy, set BLACKVUESYNC_TRUST_PROXY=1
-    # so the session cookie is only sent over https connections.
+    # so the session cookie is only sent over https connections and the
+    # X-Forwarded-* headers from that one proxy are honored.
     trust_proxy = os.environ.get("BLACKVUESYNC_TRUST_PROXY", "").lower() in (
         "1",
         "true",
@@ -57,7 +74,7 @@ def create_app(  # pylint: disable=too-many-locals,too-many-arguments,too-many-p
 
     app.config.update(
         TESTING=testing,
-        SECRET_KEY=secret.encode() if isinstance(secret, str) else secret,
+        SECRET_KEY=secret.encode(),
         SESSION_COOKIE_NAME="bvs_session",
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Lax",
@@ -65,14 +82,31 @@ def create_app(  # pylint: disable=too-many-locals,too-many-arguments,too-many-p
         PERMANENT_SESSION_LIFETIME=timedelta(hours=settings.web.session_lifetime_hours),
         WTF_CSRF_HEADERS=["X-CSRFToken"],
         WTF_CSRF_ENABLED=not testing,
+        # tokens stay bound to the session but never expire, so a page left
+        # open for hours can still submit.
+        WTF_CSRF_TIME_LIMIT=None,
     )
 
     CSRFProtect(app)
 
-    # proxy fix: honors X-Forwarded-For / X-Forwarded-Proto from one trusted proxy
-    app.wsgi_app = ProxyFix(  # type: ignore[method-assign]
-        app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1
-    )
+    def _apply_session_secret(old: Settings, new: Settings) -> None:
+        """swaps the signing key when the session secret rotates.
+
+        flask reads app.secret_key per request, so every existing session
+        cookie becomes invalid immediately.
+        """
+        rotated = new.auth.session_secret
+        if rotated and rotated != old.auth.session_secret:
+            app.secret_key = rotated.encode()
+
+    settings_store.on_change(_apply_session_secret)
+
+    # X-Forwarded-* headers are client-controlled unless a proxy overwrites
+    # them, so they are honored only when the operator opts in.
+    if trust_proxy:
+        app.wsgi_app = ProxyFix(  # type: ignore[method-assign]
+            app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1
+        )
 
     # blueprints are imported inside create_app to avoid circular imports at
     # module level; flask routes depend on the app context. pylint C0415 is
@@ -120,7 +154,7 @@ def create_app(  # pylint: disable=too-many-locals,too-many-arguments,too-many-p
         """sets security-related HTTP response headers on every response."""
         csp = (
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline'; "
+            "script-src 'self'; "
             "style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data: blob: https://*.tile.openstreetmap.org; "
             "media-src 'self' blob:; "

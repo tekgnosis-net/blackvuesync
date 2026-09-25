@@ -13,8 +13,9 @@ import datetime
 import logging
 import queue
 import threading
+import uuid
 from collections import deque
-from collections.abc import Generator
+from collections.abc import Callable, Generator, Iterator
 from typing import ClassVar
 
 
@@ -41,6 +42,37 @@ def verbosity_token(logging_settings: object) -> str:
         return "quiet"
     verbose = getattr(logging_settings, "verbose", 0)
     return {0: "normal", 1: "verbose"}.get(verbose, "debug")
+
+
+class Subscription(Iterator[list[LogLine]]):
+    """iterator over subscriber batches whose close() always unregisters.
+
+    a generator's finally only runs once it has started, so closing an
+    unstarted _drain generator alone would leak its queue.
+    """
+
+    def __init__(
+        self,
+        batches: Generator[list[LogLine], None, None],
+        unregister: Callable[[], None],
+    ) -> None:
+        self._batches = batches
+        self._unregister = unregister
+
+    def __next__(self) -> list[LogLine]:
+        return next(self._batches)
+
+    def close(self) -> None:
+        """stops the iterator and unregisters its queue."""
+        try:
+            self._batches.close()
+        finally:
+            self._unregister()
+
+
+# identifies this server process; seq restarts at 1 on every boot, so clients
+# reset their dedup watermark when the boot id changes.
+BOOT_ID = uuid.uuid4().hex
 
 
 class LogBuffer(logging.Handler):
@@ -116,7 +148,7 @@ class LogBuffer(logging.Handler):
             self._capacity = capacity
             self._lines = deque(self._lines, maxlen=capacity)
 
-    def subscribe(self) -> Generator[list[LogLine], None, None]:
+    def subscribe(self) -> Subscription:
         """returns an iterator over batches of lines emitted after this call.
 
         the subscriber queue is registered eagerly (before the first next()),
@@ -124,11 +156,17 @@ class LogBuffer(logging.Handler):
         captured. the stream intentionally does NOT replay the existing buffer:
         callers paint the initial view from snapshot() / the server-rendered
         page, then append streamed lines. an empty list is a heartbeat.
+        close() the result to unregister, whether or not it was iterated.
         """
         q: queue.Queue[LogLine] = queue.Queue(maxsize=self._SUBSCRIBER_QUEUE_MAX)
         with self._lock:
             self._subscribers.add(q)
-        return self._drain(q)
+        return Subscription(self._drain(q), lambda: self._unregister(q))
+
+    def _unregister(self, q: queue.Queue[LogLine]) -> None:
+        """removes one subscriber queue from the fan-out set."""
+        with self._lock:
+            self._subscribers.discard(q)
 
     def _drain(self, q: queue.Queue[LogLine]) -> Generator[list[LogLine], None, None]:
         """yields batches drained from one subscriber queue until closed.
@@ -151,8 +189,7 @@ class LogBuffer(logging.Handler):
                         break
                 yield batch
         finally:
-            with self._lock:
-                self._subscribers.discard(q)
+            self._unregister(q)
 
 
-__all__ = ["LogLine", "LogBuffer", "verbosity_token"]
+__all__ = ["BOOT_ID", "LogLine", "LogBuffer", "Subscription", "verbosity_token"]

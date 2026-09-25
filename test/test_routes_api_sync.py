@@ -14,7 +14,7 @@ from unittest.mock import patch
 import pytest
 
 from blackvuesync.server import create_app
-from blackvuesync.server.auth import hash_password
+from blackvuesync.server.auth import SESSION_VERSION_KEY, hash_password, session_version
 from blackvuesync.server.progress import ProgressPublisher
 from blackvuesync.settings import SettingsStore
 
@@ -98,14 +98,12 @@ class TestProgressSnapshot:
         assert body["state"] == "running"
         assert body["files_total"] == 5
 
-    def test_redirects_to_login_when_not_authenticated(
-        self, settings_path: Path
-    ) -> None:
+    def test_returns_401_when_not_authenticated(self, settings_path: Path) -> None:
         app, _ = _make_app(settings_path)
         with app.test_client() as client:
             resp = client.get("/api/sync/progress")
-        assert resp.status_code == 302
-        assert "/login" in resp.headers["Location"]
+        assert resp.status_code == 401
+        assert resp.get_json()["code"] == "AUTH_REQUIRED"
 
     def test_content_type_is_json(self, logged_in_client: Any) -> None:
         client, _ = logged_in_client
@@ -204,13 +202,12 @@ class TestTriggerNow:
         body2 = json.loads(resp2.data)
         assert body2["code"] == "SYNC_ALREADY_RUNNING"
 
-    def test_redirects_to_login_when_not_authenticated(
-        self, settings_path: Path
-    ) -> None:
+    def test_returns_401_when_not_authenticated(self, settings_path: Path) -> None:
         app, _ = _make_app(settings_path)
         with app.test_client() as client:
             resp = client.post("/api/sync/now")
-        assert resp.status_code == 302
+        assert resp.status_code == 401
+        assert resp.get_json()["code"] == "AUTH_REQUIRED"
 
     def test_post_without_csrf_token_returns_400_when_csrf_enabled(
         self, settings_path: Path
@@ -236,6 +233,9 @@ class TestTriggerNow:
             # will itself return 400; use a direct session manipulation instead).
             with client.session_transaction() as sess:
                 sess["user"] = "admin"
+                sess[SESSION_VERSION_KEY] = session_version(
+                    app.settings_store.get().auth.password_hash  # type: ignore[attr-defined]
+                )
             # POST to /api/sync/now without csrf_token
             resp = client.post("/api/sync/now")
         assert resp.status_code == 400
@@ -373,11 +373,12 @@ class TestProgressStream:
         # the second yield (same snapshot) should produce a keepalive comment
         assert b": keepalive" in combined
 
-    def test_sse_redirects_when_not_authenticated(self, settings_path: Path) -> None:
+    def test_sse_returns_401_when_not_authenticated(self, settings_path: Path) -> None:
         app, _ = _make_app(settings_path)
         with app.test_client() as client:
             resp = client.get("/api/sync/progress/stream")
-        assert resp.status_code == 302
+        assert resp.status_code == 401
+        assert resp.get_json()["code"] == "AUTH_REQUIRED"
 
 
 class TestStopSync:
@@ -414,14 +415,13 @@ class TestStopSync:
         body = json.loads(resp.data)
         assert body["code"] == "SYNC_NOT_RUNNING"
 
-    def test_redirects_to_login_when_not_authenticated(
-        self, settings_path: Path
-    ) -> None:
+    def test_returns_401_when_not_authenticated(self, settings_path: Path) -> None:
         """/api/sync/stop requires authentication."""
         app, _ = _make_app(settings_path)
         with app.test_client() as client:
             resp = client.post("/api/sync/stop")
-        assert resp.status_code == 302
+        assert resp.status_code == 401
+        assert resp.get_json()["code"] == "AUTH_REQUIRED"
 
     def test_requires_csrf_token(self, settings_path: Path) -> None:
         """POST /api/sync/stop requires a CSRF token when CSRF is enabled."""
@@ -441,5 +441,8 @@ class TestStopSync:
         with app.test_client() as client:
             with client.session_transaction() as sess:
                 sess["user"] = "admin"
+                sess[SESSION_VERSION_KEY] = session_version(
+                    app.settings_store.get().auth.password_hash  # type: ignore[attr-defined]
+                )
             resp = client.post("/api/sync/stop")
         assert resp.status_code == 400

@@ -9,7 +9,12 @@ from collections.abc import Iterator
 from flask import Blueprint, Response, current_app
 
 from blackvuesync.server.auth import login_required
-from blackvuesync.server.log_buffer import LogBuffer, LogLine, verbosity_token
+from blackvuesync.server.log_buffer import (
+    BOOT_ID,
+    LogBuffer,
+    LogLine,
+    verbosity_token,
+)
 from blackvuesync.server.sse import sse_response
 
 api_logs_bp = Blueprint("api_logs_bp", __name__, url_prefix="/api/logs")
@@ -31,7 +36,9 @@ def _current_verbosity() -> str:
 
 def _logs_frame(lines: list[LogLine]) -> bytes:
     """serializes a batch of log lines as one SSE 'logs' event frame."""
-    payload = json.dumps({"lines": [dataclasses.asdict(ln) for ln in lines]})
+    payload = json.dumps(
+        {"boot_id": BOOT_ID, "lines": [dataclasses.asdict(ln) for ln in lines]}
+    )
     return f"event: logs\ndata: {payload}\n\n".encode()
 
 
@@ -42,6 +49,7 @@ def recent() -> Response:
     buf = _buffer()
     body = json.dumps(
         {
+            "boot_id": BOOT_ID,
             "lines": [dataclasses.asdict(ln) for ln in buf.snapshot()],
             "file_path": current_app.log_file_path or "",  # type: ignore[attr-defined]
             "capacity": buf.capacity,
@@ -66,14 +74,19 @@ def stream() -> Response:
         # gap then lands in the subscriber queue (never lost) and merely
         # duplicates the snapshot, which the client de-duplicates by seq.
         batches = buf.subscribe()
-        initial = buf.snapshot()
-        if initial:
-            yield _logs_frame(initial)
-        for batch in batches:
-            if not batch:
-                yield b": keepalive\n\n"
-            else:
-                yield _logs_frame(batch)
+        try:
+            initial = buf.snapshot()
+            if initial:
+                yield _logs_frame(initial)
+            for batch in batches:
+                if not batch:
+                    yield b": keepalive\n\n"
+                else:
+                    yield _logs_frame(batch)
+        finally:
+            # unregisters even when the client left during the snapshot frame,
+            # before the subscriber iterator ever started.
+            batches.close()
 
     return sse_response(_sse_events())
 

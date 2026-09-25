@@ -12,7 +12,7 @@ from flask import Flask
 from flask.testing import FlaskClient
 
 from blackvuesync.server import create_app
-from blackvuesync.server.auth import hash_password
+from blackvuesync.server.auth import SESSION_VERSION_KEY, hash_password, session_version
 from blackvuesync.settings import SettingsStore
 
 # ---------------------------------------------------------------------------
@@ -52,6 +52,9 @@ def logged_in_client(app_with_password: Flask) -> FlaskClient:
     c = app_with_password.test_client()
     with c.session_transaction() as sess:
         sess["user"] = "admin"
+        sess[SESSION_VERSION_KEY] = session_version(
+            app_with_password.settings_store.get().auth.password_hash  # type: ignore[attr-defined]
+        )
     return c
 
 

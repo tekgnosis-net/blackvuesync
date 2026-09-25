@@ -12,7 +12,7 @@ from unittest.mock import patch
 import pytest
 
 from blackvuesync.server import create_app
-from blackvuesync.server.auth import hash_password
+from blackvuesync.server.auth import SESSION_VERSION_KEY, hash_password, session_version
 from blackvuesync.settings import AuthSettings, SettingsStore
 
 
@@ -82,9 +82,7 @@ class TestGetSettings:
         assert body["sync"]["_tier"] == "next_tick"
         assert body["logging"]["_tier"] == "immediate"
 
-    def test_redirects_to_login_when_not_authenticated(
-        self, settings_path: Path
-    ) -> None:
+    def test_returns_401_when_not_authenticated(self, settings_path: Path) -> None:
         store = _make_store(settings_path)
         pw_hash = hash_password("test-password-1234")
         store.update(
@@ -98,8 +96,8 @@ class TestGetSettings:
         app = create_app(store, testing=True)
         with app.test_client() as client:
             resp = client.get("/api/settings")
-        assert resp.status_code == 302
-        assert "/login" in resp.headers["Location"]
+        assert resp.status_code == 401
+        assert resp.get_json()["code"] == "AUTH_REQUIRED"
 
     def test_content_type_is_json(self, logged_in_client: Any) -> None:
         client, _ = logged_in_client
@@ -342,5 +340,8 @@ class TestCsrf:
         with app.test_client() as client:
             with client.session_transaction() as sess:
                 sess["user"] = "admin"
+                sess[SESSION_VERSION_KEY] = session_version(
+                    app.settings_store.get().auth.password_hash  # type: ignore[attr-defined]
+                )
             resp = client.patch("/api/settings/sync", json={"grouping": "daily"})
         assert resp.status_code == 400

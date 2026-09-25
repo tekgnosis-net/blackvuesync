@@ -12,7 +12,7 @@ from unittest.mock import patch
 import pytest
 
 from blackvuesync.server import create_app
-from blackvuesync.server.auth import hash_password
+from blackvuesync.server.auth import SESSION_VERSION_KEY, hash_password, session_version
 from blackvuesync.settings import SettingsStore
 
 
@@ -69,11 +69,12 @@ class TestPause:
         assert resp.status_code == 200
         assert store.get().schedule.paused is True
 
-    def test_redirects_to_login_when_unauthenticated(self, settings_path: Path) -> None:
+    def test_returns_401_when_unauthenticated(self, settings_path: Path) -> None:
         app, _ = _make_app(settings_path)
         with app.test_client() as client:
             resp = client.post("/api/schedule/pause")
-        assert resp.status_code == 302
+        assert resp.status_code == 401
+        assert resp.get_json()["code"] == "AUTH_REQUIRED"
 
 
 class TestResume:
@@ -123,6 +124,9 @@ class TestCsrf:
         with app.test_client() as client:
             with client.session_transaction() as sess:
                 sess["user"] = "admin"
+                sess[SESSION_VERSION_KEY] = session_version(
+                    app.settings_store.get().auth.password_hash
+                )
             resp = client.post("/api/schedule/pause")
         assert resp.status_code == 400
 
@@ -131,5 +135,8 @@ class TestCsrf:
         with app.test_client() as client:
             with client.session_transaction() as sess:
                 sess["user"] = "admin"
+                sess[SESSION_VERSION_KEY] = session_version(
+                    app.settings_store.get().auth.password_hash
+                )
             resp = client.post("/api/schedule/resume")
         assert resp.status_code == 400

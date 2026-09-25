@@ -6,15 +6,17 @@ import dataclasses
 import json
 import secrets
 
-from flask import Blueprint, Response, current_app, g, request
+from flask import Blueprint, Response, current_app, g, request, session
 
 from blackvuesync.server.auth import (
     MIN_PASSWORD_LENGTH,
+    SESSION_VERSION_KEY,
     clear_login_failures,
     hash_password,
     is_login_locked_out,
     login_required,
     record_login_failure,
+    session_version,
     verify_password,
 )
 from blackvuesync.server.routes._helpers import require_dict_body
@@ -56,6 +58,20 @@ def change_password() -> Response:
     assert payload is not None  # type narrowing for mypy
     current = payload.get("current_password", "")
     new = payload.get("new_password", "")
+    type_errors = [
+        {"path": name, "message": "must be a string"}
+        for name, value in (("current_password", current), ("new_password", new))
+        if not isinstance(value, str)
+    ]
+    if type_errors:
+        body = json.dumps(
+            {
+                "error": "invalid request body",
+                "code": "VALIDATION_ERROR",
+                "details": {"field_errors": type_errors},
+            }
+        )
+        return Response(body, status=422, mimetype=_MIME_JSON)
 
     store: SettingsStore = current_app.settings_store  # type: ignore[attr-defined]
     stored_hash = store.get().auth.password_hash
@@ -95,6 +111,10 @@ def change_password() -> Response:
         )
     )
     clear_login_failures(ip)
+    # the new hash revokes every other session; re-issues this one so the
+    # caller stays signed in.
+    if "user" in session:
+        session[SESSION_VERSION_KEY] = session_version(new_hash)
 
     body = json.dumps({"applied": True})
     return Response(body, status=200, mimetype=_MIME_JSON)
@@ -103,10 +123,11 @@ def change_password() -> Response:
 @api_auth_bp.route("/sessions", methods=["DELETE"])
 @login_required
 def rotate_sessions() -> Response:
-    """rotates the session secret. all existing sessions invalidate on next
-    restart; the running process keeps using the old secret because Flask
-    reads SECRET_KEY once at create_app() time, so propagation is
-    restart-tier even though auth itself is TIER='immediate'."""
+    """rotates the session secret, signing every session out immediately.
+
+    create_app() listens for the change and swaps app.secret_key, which Flask
+    reads per request, so no restart is needed.
+    """
     store: SettingsStore = current_app.settings_store  # type: ignore[attr-defined]
     new_secret = secrets.token_hex(32)
     store.update(
@@ -114,7 +135,10 @@ def rotate_sessions() -> Response:
             s, auth=dataclasses.replace(s.auth, session_secret=new_secret)
         )
     )
-    body = json.dumps({"rotated": True, "restart_required": True})
+    # the caller's cookie would otherwise be re-signed with the new key on
+    # this response; clearing it signs the caller out as well.
+    session.clear()
+    body = json.dumps({"rotated": True, "restart_required": False})
     return Response(body, status=200, mimetype=_MIME_JSON)
 
 

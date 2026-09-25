@@ -19,13 +19,16 @@ from werkzeug.wrappers import Response
 
 from blackvuesync.server.auth import (
     MIN_PASSWORD_LENGTH,
+    SESSION_VERSION_KEY,
     clear_login_failures,
     hash_password,
     is_login_locked_out,
     login_required,
     record_login_failure,
+    session_version,
     verify_password,
 )
+from blackvuesync.settings import Settings
 
 bp = Blueprint("auth_bp", __name__)
 
@@ -119,6 +122,7 @@ def login_post() -> tuple[str, int] | Response:
     clear_login_failures(ip)
     session.clear()
     session["user"] = auth.username
+    session[SESSION_VERSION_KEY] = session_version(auth.password_hash)
     session.permanent = True
 
     if not next_url:
@@ -189,10 +193,20 @@ def first_run_post() -> tuple[str, int] | Response:
         )
 
     pw_hash = hash_password(password)
-    current_app.settings_store.update(  # type: ignore[attr-defined]
-        lambda s: dataclasses.replace(
+
+    def _set_initial_password(s: Settings) -> Settings:
+        """stores the first password unless a concurrent request already did."""
+        if s.auth.password_hash:
+            # returning the settings unchanged keeps the winner's password
+            return s
+        return dataclasses.replace(
             s,
             auth=dataclasses.replace(s.auth, username=username, password_hash=pw_hash),
         )
+
+    # the check runs inside update(), which serializes mutations, so two
+    # concurrent first-run posts cannot both set the password.
+    current_app.settings_store.update(  # type: ignore[attr-defined]
+        _set_initial_password
     )
     return redirect(url_for(_LOGIN_ENDPOINT))

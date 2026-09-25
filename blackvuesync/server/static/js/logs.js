@@ -6,10 +6,12 @@
 // messages are untrusted text. streamed lines are de-duplicated against the
 // server-rendered snapshot and across reconnects via a monotonic seq watermark:
 // the stream replays the current buffer on connect, so a line already shown
-// (seq <= _lastSeq) is skipped.
+// (seq <= _lastSeq) is skipped. seq restarts with every server process, so a
+// frame carrying a different boot_id (or a seq behind the watermark) resets it.
 
 const SSE_BACKOFF_START_MS = 2000;
 const SSE_BACKOFF_MAX_MS = 30000;
+const LOGIN_URL = "/login?next=/logs";
 const LEVEL_ORDER = { DEBUG: 10, INFO: 20, WARNING: 30, ERROR: 40, CRITICAL: 50 };
 // verbosity token -> the settings patch body it maps to (avoids a nested ternary).
 const VERBOSITY_BODY = {
@@ -32,6 +34,8 @@ document.addEventListener("alpine:init", () => {
     verbosity: "normal",
     capacity: 1000,
     _lastSeq: 0,
+    _bootId: "",
+    error: "",
     _source: null,
     _backoffMs: SSE_BACKOFF_START_MS,
     _reconnectTimer: null,
@@ -46,6 +50,7 @@ document.addEventListener("alpine:init", () => {
       const cap = Number.parseInt(this.$el.dataset.capacity || "1000", 10);
       this.capacity = Number.isFinite(cap) && cap > 0 ? cap : 1000;
       this._pane = this.$el.querySelector("[data-pane]");
+      this._bootId = this.$el.dataset.bootId || "";
       this._lastSeq = this.maxRenderedSeq();
       this.highlightVerbosity();
       this.scrollToEnd();
@@ -92,13 +97,44 @@ document.addEventListener("alpine:init", () => {
       const body = VERBOSITY_BODY[token];
       if (!body) return;
       const resp = await this.send("/api/settings/logging", body, "PATCH");
-      if (resp?.ok) {
-        this.verbosity = token;
-        this.highlightVerbosity();
+      if (!resp) {
+        this.error = "Could not reach the server; verbosity unchanged.";
+        return;
       }
+      if (resp.status === 401) {
+        globalThis.location.assign(LOGIN_URL);
+        return;
+      }
+      if (!resp.ok) {
+        this.error = "Could not change verbosity (HTTP " + resp.status + ").";
+        return;
+      }
+      this.error = "";
+      this.verbosity = token;
+      this.highlightVerbosity();
     },
 
     // --- rendering ---
+    // detects a server restart: a new boot id, or a frame whose newest line is
+    // behind the watermark (the replayed buffer always reaches the newest line).
+    syncBoot(bootId, lines) {
+      const maxSeq = lines.reduce((m, ln) => Math.max(m, ln.seq), 0);
+      const newBoot = bootId && this._bootId && bootId !== this._bootId;
+      const wentBack = lines.length > 0 && maxSeq < this._lastSeq;
+      if (bootId) this._bootId = bootId;
+      if (!newBoot && !wentBack) return;
+      this._lastSeq = 0;
+      this._pane.appendChild(this.markerRow("server restarted"));
+    },
+
+    markerRow(text) {
+      const row = document.createElement("div");
+      row.className = "log-row log-row-marker";
+      row.dataset.levelNo = "100"; // passes every level filter
+      row.append(this.cell("log-msg", "-- " + text + " --"));
+      return row;
+    },
+
     appendLines(lines) {
       // skip lines already shown (server-rendered snapshot or a prior frame):
       // the stream replays the buffer on connect, so seq is the dedup key.
@@ -202,11 +238,14 @@ document.addEventListener("alpine:init", () => {
         return;
       }
       const lines = data?.lines;
-      if (Array.isArray(lines)) this.appendLines(lines);
+      if (!Array.isArray(lines)) return;
+      this.syncBoot(data.boot_id || "", lines);
+      this.appendLines(lines);
     },
 
     onStreamError() {
       this.closeStream();
+      this.checkAuth();
       this._reconnectTimer = setTimeout(() => this.openStream(), this._backoffMs);
       this._backoffMs = Math.min(this._backoffMs * 2, SSE_BACKOFF_MAX_MS);
     },
@@ -219,6 +258,17 @@ document.addEventListener("alpine:init", () => {
       if (this._reconnectTimer) {
         clearTimeout(this._reconnectTimer);
         this._reconnectTimer = null;
+      }
+    },
+
+    // EventSource hides the http status, so a failed stream probes the session
+    // and sends an expired one to the login page instead of retrying forever.
+    async checkAuth() {
+      try {
+        const resp = await fetch("/api/auth/me", { headers: { Accept: "application/json" } });
+        if (resp.status === 401) globalThis.location.assign(LOGIN_URL);
+      } catch {
+        /* server unreachable; the reconnect backoff keeps trying */
       }
     },
 

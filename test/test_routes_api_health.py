@@ -120,11 +120,12 @@ class TestStorage:
         assert body["available"] is False
         assert body["reason"] == "destination not configured"
 
-    def test_redirects_to_login_when_unauthenticated(self, settings_path: Path) -> None:
+    def test_returns_401_when_unauthenticated(self, settings_path: Path) -> None:
         app, _ = _make_app(settings_path)
         with app.test_client() as client:
             resp = client.get("/api/health/storage")
-        assert resp.status_code == 302
+        assert resp.status_code == 401
+        assert resp.get_json()["code"] == "AUTH_REQUIRED"
 
 
 class TestDashcam:

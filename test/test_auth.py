@@ -14,6 +14,7 @@ from flask.testing import FlaskClient
 
 from blackvuesync.server import create_app
 from blackvuesync.server.auth import (
+    SESSION_VERSION_KEY,
     _failure_timestamps,
     _locked_until,
     clear_login_failures,
@@ -21,6 +22,7 @@ from blackvuesync.server.auth import (
     is_login_locked_out,
     needs_rehash,
     record_login_failure,
+    session_version,
     verify_password,
 )
 from blackvuesync.settings import SettingsStore
@@ -240,6 +242,9 @@ def test_login_required_passes_when_session_set(app: Flask) -> None:
     with app.test_client() as c:
         with c.session_transaction() as sess:
             sess["user"] = "admin"
+            sess[SESSION_VERSION_KEY] = session_version(
+                app.settings_store.get().auth.password_hash  # type: ignore[attr-defined]
+            )
         r = c.get("/")
         assert r.status_code == 200
 

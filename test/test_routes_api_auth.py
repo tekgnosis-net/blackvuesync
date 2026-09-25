@@ -12,7 +12,12 @@ from unittest.mock import patch
 import pytest
 
 from blackvuesync.server import create_app
-from blackvuesync.server.auth import hash_password, verify_password
+from blackvuesync.server.auth import (
+    SESSION_VERSION_KEY,
+    hash_password,
+    session_version,
+    verify_password,
+)
 from blackvuesync.settings import SettingsStore
 
 
@@ -65,13 +70,14 @@ class TestAuthMe:
         assert body["username"] == "admin"
         assert body["mode"] == "login"
 
-    def test_redirects_to_login_when_unauthenticated(self, settings_path: Path) -> None:
+    def test_returns_401_when_unauthenticated(self, settings_path: Path) -> None:
         store = _make_store(settings_path)
         _seed_admin(store)
         app = create_app(store, testing=True)
         with app.test_client() as client:
             resp = client.get("/api/auth/me")
-        assert resp.status_code == 302
+        assert resp.status_code == 401
+        assert resp.get_json()["code"] == "AUTH_REQUIRED"
 
     def test_returns_anonymous_in_none_mode(self, settings_path: Path) -> None:
         """when auth.mode is 'none', /api/auth/me reports the anonymous user.
@@ -177,7 +183,7 @@ class TestChangePassword:
         assert "field_errors" in body["details"]
         assert store.get().auth.password_hash == original_hash
 
-    def test_redirects_to_login_when_unauthenticated(self, settings_path: Path) -> None:
+    def test_returns_401_when_unauthenticated(self, settings_path: Path) -> None:
         store = _make_store(settings_path)
         _seed_admin(store)
         app = create_app(store, testing=True)
@@ -186,7 +192,8 @@ class TestChangePassword:
                 "/api/auth/password",
                 json={"current_password": "x", "new_password": "y"},
             )
-        assert resp.status_code == 302
+        assert resp.status_code == 401
+        assert resp.get_json()["code"] == "AUTH_REQUIRED"
 
     def test_non_dict_body_returns_400(self, logged_in_client: Any) -> None:
         """a JSON array as body must return 400 INVALID_BODY, not 500."""
@@ -207,18 +214,19 @@ class TestRotateSessions:
         assert resp.status_code == 200
         body = json.loads(resp.data)
         assert body["rotated"] is True
-        assert body["restart_required"] is True
+        assert body["restart_required"] is False
         # the persisted secret changed
         assert store.get().auth.session_secret != original_secret
         assert len(store.get().auth.session_secret) >= 32
 
-    def test_redirects_to_login_when_unauthenticated(self, settings_path: Path) -> None:
+    def test_returns_401_when_unauthenticated(self, settings_path: Path) -> None:
         store = _make_store(settings_path)
         _seed_admin(store)
         app = create_app(store, testing=True)
         with app.test_client() as client:
             resp = client.delete("/api/auth/sessions")
-        assert resp.status_code == 302
+        assert resp.status_code == 401
+        assert resp.get_json()["code"] == "AUTH_REQUIRED"
 
 
 class TestCsrf:
@@ -238,6 +246,9 @@ class TestCsrf:
         with app.test_client() as client:
             with client.session_transaction() as sess:
                 sess["user"] = "admin"
+                sess[SESSION_VERSION_KEY] = session_version(
+                    app.settings_store.get().auth.password_hash
+                )
             resp = client.post(
                 "/api/auth/password",
                 json={"current_password": "x", "new_password": "y" * 20},
@@ -251,5 +262,8 @@ class TestCsrf:
         with app.test_client() as client:
             with client.session_transaction() as sess:
                 sess["user"] = "admin"
+                sess[SESSION_VERSION_KEY] = session_version(
+                    app.settings_store.get().auth.password_hash
+                )
             resp = client.delete("/api/auth/sessions")
         assert resp.status_code == 400

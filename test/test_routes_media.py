@@ -11,7 +11,7 @@ from unittest.mock import patch
 import pytest
 
 from blackvuesync.server import create_app
-from blackvuesync.server.auth import hash_password
+from blackvuesync.server.auth import SESSION_VERSION_KEY, hash_password, session_version
 from blackvuesync.settings import SettingsStore
 
 
@@ -40,6 +40,9 @@ def client_and_dest(tmp_path: Path):  # type: ignore[no-untyped-def]
     client = app.test_client()
     with client.session_transaction() as sess:
         sess["user"] = "admin"
+        sess[SESSION_VERSION_KEY] = session_version(
+            app.settings_store.get().auth.password_hash  # type: ignore[attr-defined]
+        )
     return client, dest
 
 

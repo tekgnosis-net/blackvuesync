@@ -8,7 +8,8 @@
 
 {% block content %}
 <div class="logs-page" x-data="logsPage"
-     data-verbosity="{{ verbosity }}" data-capacity="{{ capacity }}">
+     data-verbosity="{{ verbosity }}" data-capacity="{{ capacity }}"
+     data-boot-id="{{ log_boot_id }}">
   <div class="logs-toolbar">
     <fieldset class="logs-levels" aria-label="Minimum level">
       <button type="button" class="logs-level-btn active" data-level="DEBUG" @click="setLevel">Debug</button>
@@ -27,6 +28,8 @@
     <button type="button" class="button button-secondary button-sm" @click="togglePause" x-text="pauseLabel"></button>
     <button type="button" class="button button-secondary button-sm" @click="clearView">Clear</button>
   </div>
+
+  <p class="logs-error" role="alert" x-show="error" x-text="error"></p>
 
   <div class="logs-pane" data-pane>
     {% for ln in lines %}

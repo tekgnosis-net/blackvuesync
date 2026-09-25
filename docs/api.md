@@ -386,15 +386,13 @@ rate-limit bucket as `POST /login` (10 failures from the same IP within
 ### `DELETE /api/auth/sessions`
 
 Rotates the session secret (`auth.session_secret`) to a fresh random value.
-All existing sessions become invalid once the new secret is loaded. Flask
-reads `SECRET_KEY` once at `create_app()` time, so the running process
-continues using the old secret until restart; the response makes this
-explicit with `restart_required: true`.
+The running app switches to the new secret immediately, so every existing
+session, including the caller's, is signed out without a restart.
 
 **Response (200 OK):**
 
 ```json
-{"rotated": true, "restart_required": true}
+{"rotated": true, "restart_required": false}
 ```
 
 ---

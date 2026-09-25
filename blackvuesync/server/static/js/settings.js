@@ -197,7 +197,7 @@ document.addEventListener("alpine:init", () => {
     async rotateSessions() {
       if (
         !globalThis.confirm(
-          "Rotate the session secret? Existing sessions end on the next restart."
+          "Sign out all sessions? Everyone, including you, will need to log in again."
         )
       )
         return;
@@ -210,8 +210,8 @@ document.addEventListener("alpine:init", () => {
       if (isAuthFailure(resp, data)) {
         redirectToLogin();
       } else if (resp.ok) {
-        this.setErrors("auth", []);
-        this.showToast("auth", "Session secret rotated.");
+        // rotation also ends this session, so the next page needs a login.
+        redirectToLogin();
       } else {
         this.setErrors("auth", [
           "could not rotate sessions (" + failureText(resp, data) + ")",

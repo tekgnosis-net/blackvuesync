@@ -152,8 +152,9 @@ class TestDashcamInfo:
         assert body.get("firmware") in (None, "")
         assert body["config"]["Tab3"]["Voice"] == "ON"
 
-    def test_redirects_to_login_when_unauthenticated(self, settings_path: Path) -> None:
+    def test_returns_401_when_unauthenticated(self, settings_path: Path) -> None:
         app, _ = _make_app(settings_path)
         with app.test_client() as client:
             resp = client.get("/api/dashcam/info")
-        assert resp.status_code == 302
+        assert resp.status_code == 401
+        assert resp.get_json()["code"] == "AUTH_REQUIRED"

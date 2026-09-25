@@ -117,7 +117,7 @@ class TestRecent:
         body = json.loads(resp.data)
         assert body["total"] == 1
 
-    def test_redirects_to_login_when_unauthenticated(
+    def test_returns_401_when_unauthenticated(
         self, settings_path: Path, tmp_path: Path
     ) -> None:
         destination = tmp_path / "recordings"
@@ -126,4 +126,5 @@ class TestRecent:
         app = create_app(store, testing=True)
         with app.test_client() as client:
             resp = client.get("/api/recordings/recent")
-        assert resp.status_code == 302
+        assert resp.status_code == 401
+        assert resp.get_json()["code"] == "AUTH_REQUIRED"
