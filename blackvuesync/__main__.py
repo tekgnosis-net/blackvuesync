@@ -56,22 +56,9 @@ _DEFAULT_SETTINGS_PATH = Path(
     os.environ.get("BLACKVUESYNC_CONFIG_PATH", "/config/settings.json")
 )
 
-
-def _try_load_settings_store(path: Path) -> SettingsStore | None:
-    """attempts to load or bootstrap a settings store; returns None on failure.
-
-    in cli diagnostic mode (no /config directory) or when env-var bootstrap
-    encounters malformed inputs, the store is unavailable and settings fall
-    back entirely to cli args. failure is logged but does not crash the cli.
-    """
-    try:
-        return SettingsStore(path)
-    except Exception as e:  # pylint: disable=broad-exception-caught
-        # broad catch is deliberate: the cli must keep working even if the
-        # settings file is corrupt, env vars are malformed, or perms are off.
-        # phase c (web ui) surfaces these failures to the operator.
-        logger.debug("settings store unavailable at %s: %s", path, e)
-        return None
+# waitress worker threads; each open SSE stream (dashboard, logs) holds one
+# for its lifetime, so the default of 4 starves /healthz with a few tabs open.
+WAITRESS_THREADS = 32
 
 
 def _build_sync_parser(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[type-arg]
@@ -566,7 +553,7 @@ def cmd_serve(args: argparse.Namespace) -> int:  # pylint: disable=too-many-loca
     )
     logger.info("starting web server on 0.0.0.0:%d", port)
     try:
-        waitress.serve(app, host="0.0.0.0", port=port)
+        waitress.serve(app, host="0.0.0.0", port=port, threads=WAITRESS_THREADS)
     finally:
         # waits for the active sync (if any) to finish gracefully on SIGTERM.
         scheduler.shutdown(wait=True)
@@ -574,13 +561,11 @@ def cmd_serve(args: argparse.Namespace) -> int:  # pylint: disable=too-many-loca
 
 
 def main() -> int:
-    """dispatches to sync or serve subcommand and returns the exit code."""
-    # loads or bootstraps persistent settings (env vars seed the file on first
-    # run; subsequent runs read the file). the return value is intentionally
-    # discarded here: the side-effect of seeding the file is all that matters at
-    # this point. phase e will thread the store through to _run_sync/_run_serve.
-    _try_load_settings_store(_DEFAULT_SETTINGS_PATH)
+    """dispatches to sync or serve subcommand and returns the exit code.
 
+    only serve loads (or seeds) settings.json, at the path it is given; the
+    sync subcommand is configured entirely by its arguments.
+    """
     args = parse_args()
 
     # subcommand may be absent when parse_args is monkey-patched in tests or

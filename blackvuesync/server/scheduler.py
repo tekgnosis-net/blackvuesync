@@ -7,11 +7,19 @@ from typing import TYPE_CHECKING
 
 from apscheduler.executors.pool import ThreadPoolExecutor
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.base import BaseTrigger
+from apscheduler.triggers.combining import OrTrigger
 from apscheduler.triggers.cron import CronTrigger
 
 from blackvuesync.server.progress import ProgressPublisher
 from blackvuesync.server.sync_runner import trigger_sync
-from blackvuesync.settings import Settings, SettingsStore
+from blackvuesync.settings import (
+    DEFAULT_CRON_EXPRESSION,
+    DEFAULT_TIMEZONE,
+    Settings,
+    SettingsStore,
+    cron_trigger_fields,
+)
 
 if TYPE_CHECKING:
     from blackvuesync.server.stats_store import StatsStore
@@ -22,12 +30,38 @@ logger = logging.getLogger(__name__)
 _JOB_ID = "sync"
 
 
-def _build_trigger(settings: Settings) -> CronTrigger:
-    """builds a CronTrigger from the schedule section of settings."""
-    return CronTrigger.from_crontab(
-        settings.schedule.cron_expression,
-        timezone=settings.schedule.timezone,
-    )
+def build_cron_trigger(expression: str, timezone: str) -> BaseTrigger:
+    """builds a trigger that follows standard cron semantics.
+
+    raises ValueError (or an apscheduler/zoneinfo error) if the expression or
+    timezone is invalid.
+    """
+    triggers = [
+        CronTrigger(timezone=timezone, **kwargs)
+        for kwargs in cron_trigger_fields(expression)
+    ]
+    return triggers[0] if len(triggers) == 1 else OrTrigger(triggers)
+
+
+def _build_trigger(settings: Settings) -> BaseTrigger:
+    """builds the sync trigger from settings, falling back to the default.
+
+    a stored schedule that the scheduler rejects (e.g. written by an older
+    release with looser validation) must not crash the service on startup.
+    """
+    expression = settings.schedule.cron_expression
+    timezone = settings.schedule.timezone
+    try:
+        return build_cron_trigger(expression, timezone)
+    except Exception:  # pylint: disable=broad-exception-caught
+        logger.exception(
+            "invalid schedule %r (%s); falling back to %r (%s)",
+            expression,
+            timezone,
+            DEFAULT_CRON_EXPRESSION,
+            DEFAULT_TIMEZONE,
+        )
+        return build_cron_trigger(DEFAULT_CRON_EXPRESSION, DEFAULT_TIMEZONE)
 
 
 def _scheduled_run(
@@ -66,9 +100,11 @@ def init_scheduler(
     and a SettingsStore on_change listener reschedules the job in-place when
     those fields change.
     """
+    # the job trigger carries its own timezone, so the scheduler default is
+    # UTC rather than a stored timezone that might be invalid.
     scheduler = BackgroundScheduler(
         executors={"default": ThreadPoolExecutor(max_workers=1)},
-        timezone=store.get().schedule.timezone,
+        timezone=DEFAULT_TIMEZONE,
     )
     scheduler.add_job(
         _scheduled_run,
@@ -98,4 +134,4 @@ def init_scheduler(
     return scheduler
 
 
-__all__ = ["init_scheduler"]
+__all__ = ["build_cron_trigger", "init_scheduler"]

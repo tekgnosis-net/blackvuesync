@@ -9,7 +9,7 @@ import stat
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from unittest.mock import patch
 
 import pytest
@@ -249,10 +249,9 @@ def test_system_validate_valid() -> None:
 
 
 def test_connection_validate_empty_address() -> None:
-    """verifies empty address is rejected."""
+    """verifies empty address is allowed (the dashcam may not be configured yet)."""
     s = ConnectionSettings(address="")
-    errors = s.validate()
-    assert any("address" in e for e in errors)
+    assert s.validate() == []
 
 
 def test_connection_validate_nonpositive_timeout() -> None:
@@ -350,14 +349,14 @@ def test_system_validate_empty_destination() -> None:
 def test_settings_validate_aggregates_section_errors() -> None:
     """verifies Settings.validate() collects errors from all sections."""
     s = Settings(
-        connection=ConnectionSettings(address=""),  # error
+        connection=ConnectionSettings(timeout_seconds=0),  # error
         schedule=ScheduleSettings(cron_expression="bad cron"),  # error
         retention=RetentionSettings(max_used_disk_percent=200),  # error
     )
     errors = s.validate()
     assert len(errors) >= 3
     error_text = " ".join(errors)
-    assert "address" in error_text
+    assert "timeout_seconds" in error_text
     assert "cron_expression" in error_text
     assert "max_used_disk_percent" in error_text
 
@@ -859,18 +858,51 @@ def test_listener_exception_does_not_propagate(settings_path: Path) -> None:
     assert result.web.port == 5050
 
 
-def test_bootstrap_admin_password_env_var_logs_info(
+def test_bootstrap_admin_password_env_var_sets_hash(
     settings_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """verifies BLACKVUESYNC_ADMIN_PASSWORD env var produces an info log."""
+    """verifies BLACKVUESYNC_ADMIN_PASSWORD is hashed and never logged."""
     import logging
 
-    with caplog.at_level(logging.INFO, logger="blackvuesync.settings"):
-        _make_store(settings_path, env={"BLACKVUESYNC_ADMIN_PASSWORD": "secret"})
+    from blackvuesync.server.auth import verify_password
 
-    messages = [r.message for r in caplog.records]
-    assert any("password_hash" in m or "ADMIN_PASSWORD" in m for m in messages)
+    password = "a-long-enough-password"
+    with caplog.at_level(logging.DEBUG):
+        store = _make_store(
+            settings_path, env={"BLACKVUESYNC_ADMIN_PASSWORD": password}
+        )
+
+    assert verify_password(store.get().auth.password_hash, password)
+    assert all(password not in r.getMessage() for r in caplog.records)
+    assert password not in settings_path.read_text(encoding="utf-8")
+
+
+def test_bootstrap_admin_password_too_short_is_ignored(
+    settings_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """verifies a short BLACKVUESYNC_ADMIN_PASSWORD logs an error and is ignored."""
+    import logging
+
+    with caplog.at_level(logging.DEBUG):
+        store = _make_store(settings_path, env={"BLACKVUESYNC_ADMIN_PASSWORD": "short"})
+
+    assert store.get().auth.password_hash == ""
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert any("BLACKVUESYNC_ADMIN_PASSWORD" in r.getMessage() for r in errors)
+
+
+def test_bootstrap_admin_password_without_argon2_is_ignored(
+    settings_path: Path,
+) -> None:
+    """verifies the cli path copes with the server extras being unavailable."""
+    with patch.dict("sys.modules", {"blackvuesync.server.auth": None}):
+        store = _make_store(
+            settings_path,
+            env={"BLACKVUESYNC_ADMIN_PASSWORD": "a-long-enough-password"},
+        )
+    assert store.get().auth.password_hash == ""
 
 
 def test_section_from_dict_ignores_unknown_keys() -> None:
@@ -1075,3 +1107,218 @@ def test_viewer_section_roundtrips_and_defaults_when_absent() -> None:
     assert raw["viewer"] == {"journey_mode": "full", "speed_unit": "kmh"}
     assert _settings_from_dict(raw).viewer.journey_mode == "full"
     assert _settings_from_dict({"version": 1}).viewer.journey_mode == "progressive"
+
+
+# ---------------------------------------------------------------------------
+# cron, timezone, and type validation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "61 * * * *",
+        "*/0 * * * *",
+        "5-1 * * * *",
+        "* 24 * * *",
+        "* * 0 * *",
+        "* * 32 * *",
+        "* * * 13 *",
+        "* * * foo *",
+        "* * * * 8",
+        "* * * * sat-mon",
+        "* * * * * *",
+        "L * * * *",
+        "1,,2 * * * *",
+    ],
+)
+def test_schedule_validate_rejects_out_of_range_cron(expression: str) -> None:
+    """verifies cron fields are range-checked, not just character-checked."""
+    errors = ScheduleSettings(cron_expression=expression).validate()
+    assert any("cron_expression" in e for e in errors)
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "*/15 * * * *",
+        "0,30 8-18/2 1-15 * *",
+        "0 3 * * 7",
+        "0 3 * * 0-6",
+        "0 3 * jan-mar mon-fri",
+        "0 3 1 JAN,Jul SUN",
+        "5/10 * * * *",
+    ],
+)
+def test_schedule_validate_accepts_standard_cron(expression: str) -> None:
+    """verifies standard cron syntax (names, ranges, steps, lists) is accepted."""
+    assert ScheduleSettings(cron_expression=expression).validate() == []
+
+
+@pytest.mark.parametrize("timezone", ["Foo/Bar", "../etc/passwd", "Not A Zone"])
+def test_schedule_validate_rejects_unknown_timezone(timezone: str) -> None:
+    """verifies timezones are checked against the IANA database."""
+    errors = ScheduleSettings(timezone=timezone).validate()
+    assert any("timezone" in e for e in errors)
+
+
+def test_schedule_validate_accepts_iana_timezone() -> None:
+    """verifies a real IANA timezone is accepted."""
+    assert ScheduleSettings(timezone="America/New_York").validate() == []
+
+
+def test_cron_trigger_fields_translates_day_of_week_to_names() -> None:
+    """verifies numeric days of week follow cron numbering (0 and 7 = sunday)."""
+    from blackvuesync.settings import cron_trigger_fields
+
+    assert cron_trigger_fields("0 3 * * 0")[0]["day_of_week"] == "sun"
+    assert cron_trigger_fields("0 3 * * 7")[0]["day_of_week"] == "sun"
+    assert cron_trigger_fields("0 3 * * 1-5")[0]["day_of_week"] == (
+        "mon,tue,wed,thu,fri"
+    )
+    assert cron_trigger_fields("0 3 * * */2")[0]["day_of_week"] == "sun,tue,thu,sat"
+    assert cron_trigger_fields("0 3 * * 5-7")[0]["day_of_week"] == "sun,fri,sat"
+    assert cron_trigger_fields("0 3 * * *")[0]["day_of_week"] == "*"
+    assert cron_trigger_fields("0 3 * feb *")[0]["month"] == "2"
+
+
+def test_cron_trigger_fields_ors_restricted_day_fields() -> None:
+    """verifies restricted day of month and day of week yield two field sets."""
+    from blackvuesync.settings import cron_trigger_fields
+
+    fields_list = cron_trigger_fields("0 3 1 * mon")
+    assert [(f["day"], f["day_of_week"]) for f in fields_list] == [
+        ("1", "*"),
+        ("*", "mon"),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("section", "kwargs", "field_name"),
+    [
+        (WebSettings, {"port": "8080"}, "port"),
+        (WebSettings, {"port": True}, "port"),
+        (ConnectionSettings, {"timeout_seconds": "5"}, "timeout_seconds"),
+        (ConnectionSettings, {"address": 123}, "address"),
+        (RetentionSettings, {"max_used_disk_percent": None}, "max_used_disk_percent"),
+        (AuthSettings, {"mode": ["login"]}, "mode"),
+        (AuthSettings, {"trusted_proxies": "10.0.0.10"}, "trusted_proxies"),
+        (ScheduleSettings, {"paused": "false"}, "paused"),
+        (SyncSettings, {"skip_metadata": "t3"}, "skip_metadata"),
+        (MetricsSettings, {"file": 1}, "file"),
+    ],
+)
+def test_validate_rejects_mistyped_fields(
+    section: type, kwargs: dict[str, Any], field_name: str
+) -> None:
+    """verifies validate() reports type errors instead of raising TypeError."""
+    errors = section(**kwargs).validate()
+    assert any(field_name in e and "must be" in e for e in errors)
+
+
+def test_validate_accepts_int_for_float_and_none_for_optional() -> None:
+    """verifies float fields take ints and Optional[str] fields take None."""
+    assert ConnectionSettings(timeout_seconds=5).validate() == []
+    assert MetricsSettings(file=None, instance="x").validate() == []
+
+
+@pytest.mark.parametrize("keep", ["12h", "0", "30s", "1x"])
+def test_retention_validate_rejects_what_sync_rejects(keep: str) -> None:
+    """verifies retention.keep uses the sync path's day/week-only grammar."""
+    errors = RetentionSettings(keep=keep).validate()
+    assert any("keep" in e for e in errors)
+
+
+@pytest.mark.parametrize("keep", ["", "30", "30d", "2w"])
+def test_retention_validate_accepts_keep(keep: str) -> None:
+    """verifies an empty keep (forever) and day/week durations are accepted."""
+    assert RetentionSettings(keep=keep).validate() == []
+
+
+def test_sync_validate_rejects_zero_retry_and_bad_filters() -> None:
+    """verifies retry_failed_after and include/exclude reuse the sync parsers."""
+    assert any(
+        "retry_failed_after" in e
+        for e in SyncSettings(retry_failed_after="0").validate()
+    )
+    assert any("include" in e for e in SyncSettings(include=("*.mp4",)).validate())
+    assert any("exclude" in e for e in SyncSettings(exclude=("P,N",)).validate())
+    assert any("exclude" in e for e in SyncSettings(exclude=("NQ",)).validate())
+    assert SyncSettings(include=("P", "NF"), retry_failed_after="12h").validate() == []
+
+
+def test_bootstrap_strips_include_codes(settings_path: Path) -> None:
+    """verifies comma-separated INCLUDE codes are stripped on bootstrap."""
+    store = _make_store(settings_path, env={"INCLUDE": "P, NF ,"})
+    assert store.get().sync.include == ("P", "NF")
+
+
+# ---------------------------------------------------------------------------
+# session secret and partial validation on update
+# ---------------------------------------------------------------------------
+
+
+def _rewrite_settings(
+    settings_path: Path, mutate: Callable[[dict[str, Any]], None]
+) -> None:
+    """applies mutate to the raw settings file, keeping 0600 perms."""
+    raw = json.loads(settings_path.read_text(encoding="utf-8"))
+    mutate(raw)
+    settings_path.write_text(json.dumps(raw), encoding="utf-8")
+    os.chmod(settings_path, 0o600)
+
+
+def test_store_update_rejects_empty_session_secret(settings_path: Path) -> None:
+    """verifies the store never persists an empty session_secret."""
+    store = _make_store(settings_path)
+    with pytest.raises(ValidationError) as exc_info:
+        store.update(
+            lambda s: dataclasses.replace(
+                s, auth=dataclasses.replace(s.auth, session_secret="")
+            )
+        )
+    assert any("session_secret" in e for e in exc_info.value.errors)
+    assert store.get().auth.session_secret
+
+
+def test_load_generates_missing_session_secret(settings_path: Path) -> None:
+    """verifies a loaded file with an empty session_secret gets one persisted."""
+    _make_store(settings_path)
+    _rewrite_settings(settings_path, lambda raw: raw["auth"].update(session_secret=""))
+
+    secret = SettingsStore(settings_path).get().auth.session_secret
+    assert len(secret) == 64
+    saved = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert saved["auth"]["session_secret"] == secret
+
+
+def test_store_update_validates_only_changed_sections(settings_path: Path) -> None:
+    """verifies an invalid unchanged section does not block other updates."""
+    _make_store(settings_path)
+    _rewrite_settings(
+        settings_path,
+        lambda raw: raw["schedule"].update(cron_expression="61 * * * *"),
+    )
+
+    store = SettingsStore(settings_path)
+    result = store.update(
+        lambda s: dataclasses.replace(
+            s, sync=dataclasses.replace(s.sync, grouping="daily")
+        )
+    )
+    assert result.sync.grouping == "daily"
+
+
+def test_load_falls_back_to_default_for_mistyped_field(settings_path: Path) -> None:
+    """verifies a hand-edited value of the wrong type loads as the default."""
+    _make_store(settings_path)
+
+    def mutate(raw: dict[str, Any]) -> None:
+        raw["auth"]["trusted_proxies"] = "10.0.0.10"
+        raw["web"]["port"] = "9090"
+
+    _rewrite_settings(settings_path, mutate)
+
+    settings = SettingsStore(settings_path).get()
+    assert settings.auth.trusted_proxies == ()
+    assert settings.web.port == 8080

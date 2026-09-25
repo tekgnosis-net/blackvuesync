@@ -13,7 +13,7 @@ import pytest
 
 from blackvuesync.server import create_app
 from blackvuesync.server.auth import hash_password
-from blackvuesync.settings import SettingsStore
+from blackvuesync.settings import AuthSettings, SettingsStore
 
 
 @pytest.fixture()
@@ -62,31 +62,16 @@ class TestGetSettings:
         assert body["auth"]["password_hash"] == "***"
         assert body["auth"]["session_secret"] == "***"
 
-    def test_redacts_empty_secrets_unconditionally(self, settings_path: Path) -> None:
+    def test_redacts_empty_secrets_unconditionally(self) -> None:
         """secrets are redacted to '***' even when empty, so the first-run
         state (password_hash='') does not leak through the api."""
-        store = _make_store(settings_path)
-        pw_hash = hash_password("test-password-1234")
-        # seeds the admin so we can log in, then clears the session_secret to
-        # exercise the empty-secret branch of the redaction logic.
-        store.update(
-            lambda s: dataclasses.replace(
-                s,
-                auth=dataclasses.replace(
-                    s.auth, username="admin", password_hash=pw_hash, session_secret=""
-                ),
-            )
-        )
-        app = create_app(store, testing=True)
-        with app.test_client() as client:
-            client.post(
-                "/login",
-                data={"username": "admin", "password": "test-password-1234"},
-                follow_redirects=True,
-            )
-            resp = client.get("/api/settings")
-        body = json.loads(resp.data)
-        assert body["auth"]["session_secret"] == "***"
+        # the store refuses an empty session_secret, so the redaction helper
+        # is exercised directly with both secrets empty.
+        from blackvuesync.server.routes.api_settings import _section_to_dict
+
+        body = _section_to_dict("auth", AuthSettings())
+        assert body["password_hash"] == "***"
+        assert body["session_secret"] == "***"
 
     def test_includes_tier_per_section(self, logged_in_client: Any) -> None:
         client, _ = logged_in_client
@@ -152,7 +137,7 @@ class TestPatchSettings:
         client, _ = logged_in_client
         resp = client.patch(
             "/api/settings/connection",
-            json={"address": ""},
+            json={"timeout_seconds": -1},
         )
         assert resp.status_code == 422
         body = json.loads(resp.data)
@@ -175,22 +160,26 @@ class TestPatchSettings:
         assert after.password_hash == before
         assert after.username == "operator"
 
-    def test_non_sentinel_value_for_redacted_field_overwrites(
-        self, logged_in_client: Any
+    @pytest.mark.parametrize("field", ["password_hash", "session_secret"])
+    def test_non_sentinel_value_for_redacted_field_rejected(
+        self, logged_in_client: Any, field: str
     ) -> None:
-        """sending a real (non-sentinel) value for a redacted field overwrites.
+        """a real (non-sentinel) value for a redacted field is rejected.
 
-        guards against a future refactor that turns _strip_redacted into
-        'always strip password_hash regardless of value'.
+        secrets change only via POST /api/auth/password and
+        DELETE /api/auth/sessions.
         """
         client, store = logged_in_client
-        new_hash = hash_password("a-fresh-and-different-pw")
+        before = store.get().auth
         resp = client.patch(
             "/api/settings/auth",
-            json={"password_hash": new_hash},
+            json={field: hash_password("a-fresh-and-different-pw"), "username": "x"},
         )
-        assert resp.status_code == 200
-        assert store.get().auth.password_hash == new_hash
+        assert resp.status_code == 422
+        body = json.loads(resp.data)
+        assert body["code"] == "SETTINGS_INVALID"
+        assert body["details"]["field_errors"][0]["path"] == f"auth.{field}"
+        assert store.get().auth == before
 
     def test_non_dict_body_returns_400(self, logged_in_client: Any) -> None:
         """a JSON array as body must return 400 INVALID_BODY, not 500."""
@@ -224,6 +213,112 @@ class TestPatchSettings:
         assert patch.status_code == 200
         after = json.loads(client.get("/api/settings").data)
         assert after["stats"]["retention_days"] == 30
+
+
+class TestPatchTypeChecks:
+    """tests that mistyped values return 422 instead of 500 or being saved."""
+
+    @pytest.mark.parametrize(
+        ("section", "payload"),
+        [
+            ("web", {"port": "8080"}),
+            ("web", {"port": True}),
+            ("web", {"port": 80.5}),
+            ("connection", {"timeout_seconds": "5"}),
+            ("connection", {"address": 123}),
+            ("retention", {"max_used_disk_percent": None}),
+            ("auth", {"mode": ["login"]}),
+            ("auth", {"trusted_proxies": "10.0.0.10"}),
+            ("auth", {"trusted_proxies": [1]}),
+            ("auth", {"trusted_proxies": ["not-an-ip"]}),
+            ("schedule", {"paused": "false"}),
+            ("schedule", {"cron_expression": "61 * * * *"}),
+            ("schedule", {"timezone": "Foo/Bar"}),
+            ("sync", {"skip_metadata": "t3"}),
+            ("sync", {"skip_metadata": ["t3"]}),
+            ("sync", {"include": ["*.mp4"]}),
+            ("sync", {"include": "P"}),
+            ("sync", {"retry_failed_after": "0"}),
+            ("retention", {"keep": "12h"}),
+            ("retention", {"keep": "0"}),
+            ("metrics", {"file": 5}),
+        ],
+    )
+    def test_invalid_payload_returns_422_and_is_not_saved(
+        self, logged_in_client: Any, section: str, payload: dict[str, Any]
+    ) -> None:
+        client, store = logged_in_client
+        before = store.get()
+        resp = client.patch(f"/api/settings/{section}", json=payload)
+        assert resp.status_code == 422
+        body = json.loads(resp.data)
+        assert body["code"] == "SETTINGS_INVALID"
+        assert body["details"]["field_errors"]
+        assert store.get() == before
+
+    @pytest.mark.parametrize(
+        ("section", "payload"),
+        [
+            ("connection", {"timeout_seconds": 5}),
+            ("metrics", {"file": None}),
+            ("sync", {"include": ["P", "NF"], "exclude": []}),
+            ("sync", {"retry_failed_after": "12h"}),
+            ("retention", {"keep": ""}),
+            ("retention", {"keep": "30"}),
+            ("auth", {"trusted_proxies": ["10.0.0.10", "192.168.0.0/24"]}),
+            ("schedule", {"cron_expression": "0 3 * * sun", "timezone": "Europe/Rome"}),
+        ],
+    )
+    def test_valid_payload_is_saved(
+        self, logged_in_client: Any, section: str, payload: dict[str, Any]
+    ) -> None:
+        client, store = logged_in_client
+        resp = client.patch(f"/api/settings/{section}", json=payload)
+        assert resp.status_code == 200
+        saved = getattr(store.get(), section)
+        for key, value in payload.items():
+            expected = tuple(value) if isinstance(value, list) else value
+            assert getattr(saved, key) == expected
+
+    def test_empty_address_does_not_block_other_sections(
+        self, settings_path: Path
+    ) -> None:
+        """a first run without ADDRESS must still allow saving other sections."""
+        with patch.dict(os.environ, {"ADDRESS": ""}, clear=False):
+            store = SettingsStore(settings_path)
+        assert store.get().connection.address == ""
+        store.update(
+            lambda s: dataclasses.replace(
+                s,
+                auth=dataclasses.replace(
+                    s.auth, password_hash=hash_password("test-password-1234")
+                ),
+            )
+        )
+        app = create_app(store, testing=True)
+        with app.test_client() as client:
+            client.post(
+                "/login",
+                data={"username": "admin", "password": "test-password-1234"},
+            )
+            resp = client.patch("/api/settings/sync", json={"grouping": "daily"})
+        assert resp.status_code == 200
+        assert store.get().sync.grouping == "daily"
+
+    def test_store_validation_error_returns_422(self, logged_in_client: Any) -> None:
+        """a ValidationError raised by store.update maps to 422, not 500."""
+        from blackvuesync.settings import ValidationError
+
+        client, store = logged_in_client
+        with patch.object(
+            store, "update", side_effect=ValidationError(["boom from store"])
+        ):
+            resp = client.patch("/api/settings/sync", json={"grouping": "daily"})
+        assert resp.status_code == 422
+        messages = [
+            e["message"] for e in json.loads(resp.data)["details"]["field_errors"]
+        ]
+        assert messages == ["boom from store"]
 
 
 class TestCsrf:

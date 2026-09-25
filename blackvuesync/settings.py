@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import argparse
+import ast
 import contextlib
+import dataclasses
+import ipaddress
 import json
 import logging
 import os
@@ -10,9 +14,12 @@ import re
 import secrets
 import stat
 import threading
+import zoneinfo
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any, Callable, ClassVar, Literal
+
+from blackvuesync.sync import calc_cutoff_date, parse_duration, parse_filter
 
 logger = logging.getLogger(__name__)
 
@@ -20,13 +27,11 @@ SCHEMA_VERSION = 1
 
 PropagationTier = Literal["immediate", "next_tick", "restart"]
 
-# duration regex pattern reused from sync.py grammar: <number>[shdw]
-_DURATION_RE_PATTERN = r"^\d+[shdw]?$"
+# default schedule; also the scheduler's fallback when the stored one is unusable
+DEFAULT_CRON_EXPRESSION = "*/15 * * * *"
+DEFAULT_TIMEZONE = "UTC"
 
-# valid cron token characters
-_CRON_FIELD_RE_PATTERN = r"^[0-9*/,\-]+$"
-
-# valid skip-metadata type codes
+# valid skip-metadata type codes (mirrors sync.VALID_METADATA_TYPES)
 _VALID_SKIP_METADATA = frozenset(("t", "3", "g"))
 
 # valid Literal field values for member-check validation
@@ -36,17 +41,267 @@ _VALID_LOG_FORMATS = frozenset(("text", "json"))
 _VALID_AUTH_MODES = frozenset(("login", "none", "proxy"))
 
 
-def _valid_duration(value: str) -> bool:
-    """returns True if value matches the duration grammar used by blackvuesync."""
-    return bool(re.match(_DURATION_RE_PATTERN, value))
+# ---------------------------------------------------------------------------
+# cron and timezone validation
+# ---------------------------------------------------------------------------
+
+_MONTH_NAMES = (
+    "jan",
+    "feb",
+    "mar",
+    "apr",
+    "may",
+    "jun",
+    "jul",
+    "aug",
+    "sep",
+    "oct",
+    "nov",
+    "dec",
+)
+# standard cron numbering: 0 (and 7) is sunday; also apscheduler's names
+_DOW_NAMES = ("sun", "mon", "tue", "wed", "thu", "fri", "sat")
+
+# (label, min, max, names, value of the first name) per cron field
+_CRON_FIELD_SPECS: tuple[tuple[str, int, int, tuple[str, ...], int], ...] = (
+    ("minute", 0, 59, (), 0),
+    ("hour", 0, 23, (), 0),
+    ("day of month", 1, 31, (), 0),
+    ("month", 1, 12, _MONTH_NAMES, 1),
+    ("day of week", 0, 7, _DOW_NAMES, 0),
+)
+
+_CRON_ITEM_RE = re.compile(
+    r"^(?P<base>\*|[0-9a-z]+(?:-[0-9a-z]+)?)(?:/(?P<step>\d+))?$"
+)
 
 
-def _valid_cron(value: str) -> bool:
-    """returns True if value looks like a valid 5-field cron expression."""
-    parts = value.split()
-    if len(parts) != 5:
-        return False
-    return all(re.match(_CRON_FIELD_RE_PATTERN, p) for p in parts)
+def _cron_value(
+    token: str, lo: int, hi: int, names: tuple[str, ...], first: int
+) -> int:
+    """converts a cron value (number or name) to an int within [lo, hi]."""
+    if token.isdigit():
+        value = int(token)
+    elif token in names:
+        value = names.index(token) + first
+    else:
+        raise ValueError(f"unknown value {token!r}")
+    if not lo <= value <= hi:
+        raise ValueError(f"value {value} is outside {lo}-{hi}")
+    return value
+
+
+def _expand_cron_field(
+    text: str, lo: int, hi: int, names: tuple[str, ...], first: int
+) -> set[int]:
+    """expands one cron field (lists, ranges, steps, names) to its values."""
+    values: set[int] = set()
+    for item in text.lower().split(","):
+        match = _CRON_ITEM_RE.match(item)
+        if match is None:
+            raise ValueError(f"malformed item {item!r}")
+        base, step_raw = match.group("base"), match.group("step")
+        step = int(step_raw) if step_raw is not None else 1
+        if step < 1:
+            raise ValueError(f"step in {item!r} must be greater than zero")
+        if base == "*":
+            start, end = lo, hi
+        elif "-" in base:
+            low_token, high_token = base.split("-")
+            start = _cron_value(low_token, lo, hi, names, first)
+            end = _cron_value(high_token, lo, hi, names, first)
+            if start > end:
+                raise ValueError(f"range {base!r} is reversed")
+        else:
+            start = _cron_value(base, lo, hi, names, first)
+            # "5/10" means "5-max/10", as in vixie cron and apscheduler
+            end = hi if step_raw is not None else start
+        values.update(range(start, end + 1, step))
+    return values
+
+
+def _parse_cron(expression: str) -> list[set[int]]:
+    """parses a standard 5-field cron expression; raises ValueError if invalid."""
+    parts = expression.split()
+    if len(parts) != len(_CRON_FIELD_SPECS):
+        raise ValueError(f"expected 5 fields, got {len(parts)}")
+    expanded: list[set[int]] = []
+    for text, (label, lo, hi, names, first) in zip(parts, _CRON_FIELD_SPECS):
+        try:
+            expanded.append(_expand_cron_field(text, lo, hi, names, first))
+        except ValueError as e:
+            raise ValueError(f"{label} field {text!r}: {e}") from e
+    return expanded
+
+
+def cron_trigger_fields(expression: str) -> list[dict[str, str]]:
+    """translates a standard cron expression to apscheduler CronTrigger kwargs.
+
+    apscheduler numbers days of the week from monday (0) while cron numbers
+    them from sunday (0 or 7), so the day of week is emitted as names. when
+    both day of month and day of week are restricted, cron fires when either
+    matches, so two kwarg sets are returned for the caller to OR together.
+    raises ValueError if the expression is invalid.
+    """
+    expanded = _parse_cron(expression)
+    minute, hour, day, month, dow = expression.split()
+    days_of_week = sorted({d % 7 for d in expanded[4]})
+    dow_field = (
+        "*"
+        if len(days_of_week) == len(_DOW_NAMES)
+        else ",".join(_DOW_NAMES[d] for d in days_of_week)
+    )
+    month_field = re.sub(
+        "[a-z]+",
+        lambda m: str(_MONTH_NAMES.index(m.group()) + 1),
+        month.lower(),
+    )
+    base = {"minute": minute, "hour": hour, "month": month_field}
+    if not day.startswith("*") and not dow.startswith("*"):
+        return [
+            {**base, "day": day, "day_of_week": "*"},
+            {**base, "day": "*", "day_of_week": dow_field},
+        ]
+    return [{**base, "day": day, "day_of_week": dow_field}]
+
+
+def _cron_error(expression: str) -> str | None:
+    """returns why expression is not a valid cron expression, or None."""
+    try:
+        _parse_cron(expression)
+    except ValueError as e:
+        return str(e)
+    return None
+
+
+def _timezone_error(timezone: str) -> str | None:
+    """returns why timezone is not a known IANA timezone, or None."""
+    if not timezone:
+        return "must not be empty"
+    try:
+        zoneinfo.ZoneInfo(timezone)
+    except (ValueError, zoneinfo.ZoneInfoNotFoundError):
+        return f"unknown timezone {timezone!r}"
+    return None
+
+
+def _scheduler_error(expression: str, timezone: str) -> str | None:
+    """returns why apscheduler rejects the schedule, or None.
+
+    skipped when apscheduler is not installed (the cli sync path).
+    """
+    try:
+        # pylint: disable-next=import-outside-toplevel
+        from apscheduler.triggers.cron import CronTrigger
+    except ImportError:
+        return None
+    try:
+        for kwargs in cron_trigger_fields(expression):
+            CronTrigger(timezone=timezone, **kwargs)
+    except Exception as e:  # pylint: disable=broad-exception-caught
+        return str(e)
+    return None
+
+
+# ---------------------------------------------------------------------------
+# field type checking
+# ---------------------------------------------------------------------------
+
+
+def _split_top_level(annotation: str, separator: str) -> list[str]:
+    """splits annotation on separator, ignoring separators inside brackets."""
+    parts: list[str] = []
+    depth = 0
+    current = ""
+    for char in annotation:
+        if char == "[":
+            depth += 1
+        elif char == "]":
+            depth -= 1
+        if char == separator and depth == 0:
+            parts.append(current.strip())
+            current = ""
+        else:
+            current += char
+    parts.append(current.strip())
+    return parts
+
+
+def _literal_values(annotation: str) -> tuple[Any, ...]:
+    """returns the values of a Literal[...] annotation string."""
+    return tuple(ast.literal_eval(f"({annotation[len('Literal[') : -1]},)"))
+
+
+def _type_matches(  # pylint: disable=too-many-return-statements
+    annotation: str, value: Any
+) -> bool:
+    """returns True if value conforms to the annotation string.
+
+    Literal annotations check only the base type; member checks stay in the
+    section validators so their error messages are specific.
+    """
+    options = _split_top_level(annotation, "|")
+    if len(options) > 1:
+        return any(_type_matches(option, value) for option in options)
+    annotation = options[0]
+    if annotation == "None":
+        return value is None
+    if annotation == "bool":
+        return isinstance(value, bool)
+    if annotation == "int":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if annotation == "float":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if annotation == "str":
+        return isinstance(value, str)
+    if annotation.startswith("Literal["):
+        return any(type(value) is type(v) for v in _literal_values(annotation))
+    if annotation.startswith("tuple[") and annotation.endswith(", ...]"):
+        item = annotation[len("tuple[") : -len(", ...]")]
+        return isinstance(value, (tuple, list)) and all(
+            _type_matches(item, v) for v in value
+        )
+    raise TypeError(f"unsupported settings annotation: {annotation!r}")
+
+
+def _describe_type(annotation: str) -> str:
+    """returns a human description of an annotation string."""
+    options = _split_top_level(annotation, "|")
+    if len(options) > 1:
+        return " or ".join(_describe_type(option) for option in options)
+    annotation = options[0]
+    if annotation.startswith("tuple["):
+        item = _describe_type(annotation[len("tuple[") : -len(", ...]")])
+        return f"a list of {item.split(' ', 1)[1]}s"
+    if annotation.startswith("Literal["):
+        return _describe_type(type(_literal_values(annotation)[0]).__name__)
+    return {
+        "None": "null",
+        "bool": "a boolean",
+        "int": "an integer",
+        "float": "a number",
+        "str": "a string",
+    }.get(annotation, annotation)
+
+
+class _Section:  # pylint: disable=too-few-public-methods
+    """base for section dataclasses: type-checks fields before value checks."""
+
+    def validate(self) -> list[str]:
+        """validates field types, then values; returns a list of error strings."""
+        prefix = _SECTION_NAMES.get(type(self), type(self).__name__)
+        errors = [
+            f"{prefix}.{f.name} must be {_describe_type(str(f.type))}, "
+            f"got {type(getattr(self, f.name)).__name__}"
+            for f in fields(self)  # type: ignore[arg-type]
+            if not _type_matches(str(f.type), getattr(self, f.name))
+        ]
+        # value checks assume correct types, so they only run when types pass
+        return errors or self._validate_values()
+
+    def _validate_values(self) -> list[str]:
+        """validates field values; returns a list of error strings."""
+        return []
 
 
 # ---------------------------------------------------------------------------
@@ -55,49 +310,56 @@ def _valid_cron(value: str) -> bool:
 
 
 @dataclass(frozen=True)
-class ConnectionSettings:
+class ConnectionSettings(_Section):
     """connection settings for the dashcam."""
 
     TIER: ClassVar[PropagationTier] = "restart"
 
+    # empty until configured; the sync path reports a missing address
     address: str = ""
     timeout_seconds: float = 10.0
 
-    def validate(self) -> list[str]:
+    def _validate_values(self) -> list[str]:
         """validates connection settings; returns a list of error strings."""
         errors: list[str] = []
-        if not self.address:
-            errors.append("connection.address must not be empty")
         if self.timeout_seconds <= 0:
             errors.append("connection.timeout_seconds must be greater than zero")
         return errors
 
 
 @dataclass(frozen=True)
-class ScheduleSettings:
+class ScheduleSettings(_Section):
     """sync schedule settings."""
 
     TIER: ClassVar[PropagationTier] = "next_tick"
 
-    cron_expression: str = "*/15 * * * *"
-    timezone: str = "UTC"
+    cron_expression: str = DEFAULT_CRON_EXPRESSION
+    timezone: str = DEFAULT_TIMEZONE
     paused: bool = False
 
-    def validate(self) -> list[str]:
+    def _validate_values(self) -> list[str]:
         """validates schedule settings; returns a list of error strings."""
         errors: list[str] = []
-        if not _valid_cron(self.cron_expression):
+        cron_error = _cron_error(self.cron_expression)
+        if cron_error is not None:
             errors.append(
-                f"schedule.cron_expression is not a valid 5-field cron expression: "
-                f"{self.cron_expression!r}"
+                f"schedule.cron_expression is not a valid 5-field cron expression "
+                f"({cron_error}): {self.cron_expression!r}"
             )
-        if not self.timezone:
-            errors.append("schedule.timezone must not be empty")
+        timezone_error = _timezone_error(self.timezone)
+        if timezone_error is not None:
+            errors.append(f"schedule.timezone is invalid: {timezone_error}")
+        if not errors:
+            scheduler_error = _scheduler_error(self.cron_expression, self.timezone)
+            if scheduler_error is not None:
+                errors.append(
+                    f"schedule is rejected by the scheduler: {scheduler_error}"
+                )
         return errors
 
 
 @dataclass(frozen=True)
-class SyncSettings:
+class SyncSettings(_Section):
     """recording sync settings."""
 
     TIER: ClassVar[PropagationTier] = "next_tick"
@@ -110,7 +372,7 @@ class SyncSettings:
     skip_metadata: tuple[Literal["t", "3", "g"], ...] = ()
     affinity_key: str | None = None
 
-    def validate(self) -> list[str]:
+    def _validate_values(self) -> list[str]:
         """validates sync settings; returns a list of error strings."""
         errors: list[str] = []
         if self.priority not in _VALID_PRIORITIES:
@@ -123,12 +385,24 @@ class SyncSettings:
                 f"sync.grouping must be one of {sorted(_VALID_GROUPINGS)!r}, "
                 f"got {self.grouping!r}"
             )
-        if not _valid_duration(self.retry_failed_after):
+        for name in ("include", "exclude"):
+            for code in getattr(self, name):
+                try:
+                    valid = parse_filter(code) == (code,)
+                    reason = "must be a single code, e.g. P or NF"
+                except argparse.ArgumentTypeError as e:
+                    valid, reason = False, str(e)
+                if not valid:
+                    errors.append(f"sync.{name} entry {code!r} is invalid: {reason}")
+        try:
+            parse_duration(self.retry_failed_after, label="sync.retry_failed_after")
+        except (RuntimeError, OverflowError) as e:
             errors.append(
-                f"sync.retry_failed_after is not a valid duration: "
-                f"{self.retry_failed_after!r}"
+                f"sync.retry_failed_after is not a valid duration: {e} "
+                f"(got {self.retry_failed_after!r})"
             )
-        invalid_meta = {str(m) for m in self.skip_metadata} - _VALID_SKIP_METADATA
+        # one letter per entry; the sync path matches entries individually
+        invalid_meta = {m for m in self.skip_metadata if m not in _VALID_SKIP_METADATA}
         if invalid_meta:
             errors.append(
                 f"sync.skip_metadata contains invalid tokens: {sorted(invalid_meta)!r}"
@@ -137,26 +411,32 @@ class SyncSettings:
 
 
 @dataclass(frozen=True)
-class RetentionSettings:
+class RetentionSettings(_Section):
     """recording retention settings."""
 
     TIER: ClassVar[PropagationTier] = "next_tick"
 
+    # empty keeps recordings forever
     keep: str = "2w"
     max_used_disk_percent: int = 90
 
-    def validate(self) -> list[str]:
+    def _validate_values(self) -> list[str]:
         """validates retention settings; returns a list of error strings."""
         errors: list[str] = []
-        if not _valid_duration(self.keep):
-            errors.append(f"retention.keep is not a valid duration: {self.keep!r}")
+        if self.keep:
+            try:
+                calc_cutoff_date(self.keep)
+            except (RuntimeError, OverflowError) as e:
+                errors.append(
+                    f"retention.keep is not a valid duration: {e} (got {self.keep!r})"
+                )
         if not 1 <= self.max_used_disk_percent <= 100:
             errors.append("retention.max_used_disk_percent must be between 1 and 100")
         return errors
 
 
 @dataclass(frozen=True)
-class LoggingSettings:
+class LoggingSettings(_Section):
     """logging output settings."""
 
     TIER: ClassVar[PropagationTier] = "immediate"
@@ -168,7 +448,7 @@ class LoggingSettings:
     file_backup_count: int = 5
     ring_buffer_capacity: int = 1000
 
-    def validate(self) -> list[str]:
+    def _validate_values(self) -> list[str]:
         """validates logging settings; returns a list of error strings."""
         errors: list[str] = []
         if self.format not in _VALID_LOG_FORMATS:
@@ -188,7 +468,7 @@ class LoggingSettings:
 
 
 @dataclass(frozen=True)
-class MetricsSettings:
+class MetricsSettings(_Section):
     """prometheus metrics export settings."""
 
     TIER: ClassVar[PropagationTier] = "immediate"
@@ -199,20 +479,16 @@ class MetricsSettings:
     instance: str | None = None
     state_file: str = "/config/metrics-state.json"
 
-    def validate(self) -> list[str]:
-        """validates metrics settings; returns a list of error strings."""
-        return []
-
 
 @dataclass(frozen=True)
-class StatsSettings:
+class StatsSettings(_Section):
     """statistics time-series store settings."""
 
     TIER: ClassVar[PropagationTier] = "next_tick"
 
     retention_days: int = 365  # prune run records older than this; 0 keeps all
 
-    def validate(self) -> list[str]:
+    def _validate_values(self) -> list[str]:
         """validates stats settings; returns a list of error strings."""
         errors: list[str] = []
         if self.retention_days < 0:
@@ -221,7 +497,7 @@ class StatsSettings:
 
 
 @dataclass(frozen=True)
-class ViewerSettings:
+class ViewerSettings(_Section):
     """dashcam viewer settings."""
 
     TIER: ClassVar[PropagationTier] = "immediate"
@@ -229,7 +505,7 @@ class ViewerSettings:
     journey_mode: Literal["progressive", "full"] = "progressive"
     speed_unit: Literal["kmh", "mph"] = "kmh"
 
-    def validate(self) -> list[str]:
+    def _validate_values(self) -> list[str]:
         """validates viewer settings; returns a list of error strings."""
         errors: list[str] = []
         if self.journey_mode not in ("progressive", "full"):
@@ -240,7 +516,7 @@ class ViewerSettings:
 
 
 @dataclass(frozen=True)
-class WebSettings:
+class WebSettings(_Section):
     """web server settings."""
 
     TIER: ClassVar[PropagationTier] = "restart"
@@ -248,7 +524,7 @@ class WebSettings:
     port: int = 8080
     session_lifetime_hours: int = 24
 
-    def validate(self) -> list[str]:
+    def _validate_values(self) -> list[str]:
         """validates web settings; returns a list of error strings."""
         errors: list[str] = []
         if not 1 <= self.port <= 65535:
@@ -259,7 +535,7 @@ class WebSettings:
 
 
 @dataclass(frozen=True)
-class AuthSettings:
+class AuthSettings(_Section):
     """authentication settings."""
 
     TIER: ClassVar[PropagationTier] = "immediate"
@@ -267,11 +543,12 @@ class AuthSettings:
     mode: Literal["login", "none", "proxy"] = "login"
     username: str = "admin"
     password_hash: str = ""
+    # SettingsStore generates one on load when empty and refuses to store ""
     session_secret: str = ""
     trusted_proxies: tuple[str, ...] = ()
     proxy_user_header: str = "X-Remote-User"
 
-    def validate(self) -> list[str]:
+    def _validate_values(self) -> list[str]:
         """validates auth settings; returns a list of error strings."""
         errors: list[str] = []
         if self.mode not in _VALID_AUTH_MODES:
@@ -279,6 +556,13 @@ class AuthSettings:
                 f"auth.mode must be one of {sorted(_VALID_AUTH_MODES)!r}, "
                 f"got {self.mode!r}"
             )
+        for proxy in self.trusted_proxies:
+            try:
+                ipaddress.ip_network(proxy, strict=False)
+            except ValueError:
+                errors.append(
+                    f"auth.trusted_proxies entry {proxy!r} is not an IP address or network"
+                )
         if self.mode == "proxy":
             if not self.trusted_proxies:
                 errors.append(
@@ -292,7 +576,7 @@ class AuthSettings:
 
 
 @dataclass(frozen=True)
-class SystemSettings:
+class SystemSettings(_Section):
     """system-level settings."""
 
     TIER: ClassVar[PropagationTier] = "restart"
@@ -300,7 +584,7 @@ class SystemSettings:
     destination: str = "/recordings"
     dry_run: bool = False
 
-    def validate(self) -> list[str]:
+    def _validate_values(self) -> list[str]:
         """validates system settings; returns a list of error strings."""
         errors: list[str] = []
         if not self.destination:
@@ -366,6 +650,8 @@ _SECTION_FIELDS: dict[str, type] = {
     "system": SystemSettings,
 }
 
+_SECTION_NAMES: dict[type, str] = {cls: name for name, cls in _SECTION_FIELDS.items()}
+
 # fields whose values are tuple[str, ...] and must be round-tripped as lists
 _TUPLE_FIELDS: dict[str, set[str]] = {
     "sync": {"include", "exclude", "skip_metadata"},
@@ -400,16 +686,27 @@ def _settings_to_dict(settings: Settings) -> dict[str, Any]:
 
 
 def _section_from_dict(cls: type, raw: dict[str, Any], tuple_fields: set[str]) -> Any:
-    """constructs a frozen section dataclass from a dict, restoring tuples."""
+    """constructs a frozen section dataclass from a dict, restoring tuples.
+
+    a value of the wrong type (e.g. a hand-edited file) falls back to the
+    field default rather than reaching code that assumes the declared type.
+    """
     kwargs: dict[str, Any] = {}
-    valid_field_names = {f.name for f in fields(cls)}
+    annotations = {f.name: str(f.type) for f in fields(cls)}
     for key, value in raw.items():
-        if key not in valid_field_names:
+        if key not in annotations:
             continue
         if key in tuple_fields and isinstance(value, list):
-            kwargs[key] = tuple(value)
-        else:
-            kwargs[key] = value
+            value = tuple(value)
+        if not _type_matches(annotations[key], value):
+            logger.warning(
+                "settings field %s.%s must be %s; using the default",
+                _SECTION_NAMES.get(cls, cls.__name__),
+                key,
+                _describe_type(annotations[key]),
+            )
+            continue
+        kwargs[key] = value
     return cls(**kwargs)
 
 
@@ -448,6 +745,38 @@ def migrate(raw: dict[str, Any], from_version: int) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
+def _split_codes(raw: str) -> tuple[str, ...]:
+    """splits a comma-separated env var into stripped, non-empty entries."""
+    return tuple(code.strip() for code in raw.split(",") if code.strip())
+
+
+def _hash_admin_password(password: str) -> str:
+    """hashes the bootstrap admin password; returns "" when it cannot be used.
+
+    the server's argon2 helper is imported lazily so the cli sync path keeps
+    working without argon2-cffi and flask installed.
+    """
+    try:
+        # pylint: disable-next=import-outside-toplevel
+        from blackvuesync.server.auth import MIN_PASSWORD_LENGTH, hash_password
+    except ImportError as e:
+        logger.error(
+            "BLACKVUESYNC_ADMIN_PASSWORD ignored: password hashing unavailable (%s); "
+            "set the password through the first-run page",
+            e,
+        )
+        return ""
+    if len(password) < MIN_PASSWORD_LENGTH:
+        logger.error(
+            "BLACKVUESYNC_ADMIN_PASSWORD ignored: shorter than %d characters; "
+            "set the password through the first-run page",
+            MIN_PASSWORD_LENGTH,
+        )
+        return ""
+    logger.info("admin password set from BLACKVUESYNC_ADMIN_PASSWORD")
+    return hash_password(password)
+
+
 class ValidationError(Exception):
     """raised when Settings.validate() returns errors."""
 
@@ -473,11 +802,23 @@ class SettingsStore:
             return self._settings
 
     def update(self, mutation: Callable[[Settings], Settings]) -> Settings:
-        """applies mutation, validates, persists atomically, and notifies listeners."""
+        """applies mutation, validates, persists atomically, and notifies listeners.
+
+        only the sections the mutation changes are validated, so a section
+        loaded with an invalid value (logged at load time) does not block
+        edits to unrelated sections.
+        """
         with self._lock:
             old = self._settings
             new = mutation(old)
-            errors = new.validate()
+            errors = [
+                error
+                for name in _SECTION_FIELDS
+                if getattr(new, name) != getattr(old, name)
+                for error in getattr(new, name).validate()
+            ]
+            if not new.auth.session_secret:
+                errors.append("auth.session_secret must not be empty")
             if errors:
                 raise ValidationError(errors)
             self._save(new)
@@ -590,8 +931,8 @@ class SettingsStore:
         sync = SyncSettings(
             priority=_env("PRIORITY", "date"),  # type: ignore[arg-type]
             grouping=_env("GROUPING", "none"),  # type: ignore[arg-type]
-            include=tuple(raw_include.split(",")) if raw_include else (),
-            exclude=tuple(raw_exclude.split(",")) if raw_exclude else (),
+            include=_split_codes(raw_include),
+            exclude=_split_codes(raw_exclude),
             retry_failed_after=_env("RETRY_FAILED_AFTER", "1d"),
             skip_metadata=tuple(raw_skip_meta) if raw_skip_meta else (),  # type: ignore[arg-type]
             affinity_key=_env("AFFINITY_KEY", "") or None,
@@ -628,15 +969,11 @@ class SettingsStore:
         )
 
         admin_password = _env("BLACKVUESYNC_ADMIN_PASSWORD", "")
-        if admin_password:
-            # password hashing deferred to phase c; first-run wizard will hash it
-            logger.info(
-                "BLACKVUESYNC_ADMIN_PASSWORD set; password_hash will be populated "
-                "by the first-run wizard in phase c"
-            )
         auth = AuthSettings(
             username=_env("BLACKVUESYNC_ADMIN_USERNAME", "admin"),
-            password_hash="",
+            password_hash=(
+                _hash_admin_password(admin_password) if admin_password else ""
+            ),
             session_secret=secrets.token_hex(32),
         )
 
@@ -673,9 +1010,24 @@ class SettingsStore:
         return settings
 
     def _load_or_bootstrap(self) -> Settings:
-        """loads settings from disk if the file exists; otherwise bootstraps from env."""
+        """loads settings from disk if the file exists; otherwise bootstraps from env.
+
+        a loaded file without a session secret gets a fresh one, persisted
+        immediately so sessions survive restarts.
+        """
         if self._path.exists():
-            return self._load()
+            settings = self._load()
+            if settings.auth.session_secret:
+                return settings
+            logger.warning("auth.session_secret is empty; generating a new one")
+            settings = dataclasses.replace(
+                settings,
+                auth=dataclasses.replace(
+                    settings.auth, session_secret=secrets.token_hex(32)
+                ),
+            )
+            self._save(settings)
+            return settings
         settings = self._bootstrap_from_env()
         self._save(settings)
         return settings

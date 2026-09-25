@@ -16,6 +16,7 @@ from blackvuesync.settings import (
     _TUPLE_FIELDS,
     Settings,
     SettingsStore,
+    ValidationError,
 )
 
 api_settings_bp = Blueprint("api_settings_bp", __name__, url_prefix="/api/settings")
@@ -23,7 +24,8 @@ api_settings_bp = Blueprint("api_settings_bp", __name__, url_prefix="/api/settin
 _MIME_JSON = "application/json"
 
 # _REDACTED_FIELDS is defined in settings.py and imported above; the literal
-# "***" sentinel is returned for those fields and stripped on inbound patches.
+# "***" sentinel is returned for those fields and stripped on inbound patches,
+# and any other inbound value for them is rejected.
 
 _REDACTED_SENTINEL = "***"
 
@@ -63,19 +65,34 @@ def get_settings() -> Response:
     )
 
 
-def _strip_redacted(payload: dict[str, Any], section_name: str) -> dict[str, Any]:
-    """removes fields whose value is the redaction sentinel.
+def _strip_redacted(
+    payload: dict[str, Any], section_name: str
+) -> tuple[dict[str, Any], list[str]]:
+    """removes redacted fields from payload; returns it with rejected field names.
 
     a client that re-submits the redacted snapshot from GET must not
-    overwrite the real secret with '***'. callers treat absent keys as
-    'leave unchanged'.
+    overwrite the real secret with '***', so the sentinel is dropped and
+    callers treat absent keys as 'leave unchanged'. any other value for a
+    redacted field is rejected: secrets change only through
+    POST /api/auth/password and DELETE /api/auth/sessions.
     """
     redact = _REDACTED_FIELDS.get(section_name, set())
-    return {
-        k: v
-        for k, v in payload.items()
-        if not (k in redact and v == _REDACTED_SENTINEL)
-    }
+    rejected = sorted(
+        k for k in payload if k in redact and payload[k] != _REDACTED_SENTINEL
+    )
+    return {k: v for k, v in payload.items() if k not in redact}, rejected
+
+
+def _invalid_response(field_errors: list[dict[str, str]]) -> Response:
+    """returns the 422 SETTINGS_INVALID envelope for field_errors."""
+    body = json.dumps(
+        {
+            "error": "settings validation failed",
+            "code": "SETTINGS_INVALID",
+            "details": {"field_errors": field_errors},
+        }
+    )
+    return Response(body, status=422, mimetype=_MIME_JSON)
 
 
 def _coerce_tuples(payload: dict[str, Any], section_name: str) -> dict[str, Any]:
@@ -114,7 +131,18 @@ def patch_section(section_name: str) -> Response:
     if err is not None:
         return err
     assert payload is not None  # type narrowing for mypy
-    payload = _strip_redacted(payload, section_name)
+    payload, rejected = _strip_redacted(payload, section_name)
+    if rejected:
+        return _invalid_response(
+            [
+                {
+                    "path": f"{section_name}.{name}",
+                    "message": f"{section_name}.{name} is read-only here; use "
+                    "POST /api/auth/password or DELETE /api/auth/sessions",
+                }
+                for name in rejected
+            ]
+        )
     payload = _coerce_tuples(payload, section_name)
 
     store: SettingsStore = current_app.settings_store  # type: ignore[attr-defined]
@@ -126,35 +154,31 @@ def patch_section(section_name: str) -> Response:
         new_section = dataclasses.replace(current_section, **payload)
     except TypeError as e:
         # unknown field name in payload; treat as a validation failure.
-        body = json.dumps(
-            {
-                "error": "settings validation failed",
-                "code": "SETTINGS_INVALID",
-                "details": {
-                    "field_errors": [
-                        {"path": f"{section_name}.?", "message": str(e)},
-                    ]
-                },
-            }
-        )
-        return Response(body, status=422, mimetype=_MIME_JSON)
+        return _invalid_response([{"path": f"{section_name}.?", "message": str(e)}])
 
+    # type checks run first inside validate(), so mistyped values never reach
+    # the value checks or the store.
     errors = new_section.validate()
+    if not errors:
+        # re-applies the payload to the section as of the update, so a
+        # concurrent change to another field of the section is not reverted.
+        try:
+            store.update(
+                lambda s: dataclasses.replace(
+                    s,
+                    **{
+                        section_name: dataclasses.replace(
+                            getattr(s, section_name), **payload
+                        )
+                    },
+                )
+            )
+        except ValidationError as e:
+            errors = e.errors
     if errors:
-        body = json.dumps(
-            {
-                "error": "settings validation failed",
-                "code": "SETTINGS_INVALID",
-                "details": {
-                    "field_errors": [
-                        {"path": section_name, "message": msg} for msg in errors
-                    ]
-                },
-            }
+        return _invalid_response(
+            [{"path": section_name, "message": msg} for msg in errors]
         )
-        return Response(body, status=422, mimetype=_MIME_JSON)
-
-    store.update(lambda s: dataclasses.replace(s, **{section_name: new_section}))
 
     body = json.dumps(
         {

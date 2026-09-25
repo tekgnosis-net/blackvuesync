@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import dataclasses
+import datetime
+import json
 import os
 from pathlib import Path
 from unittest.mock import patch
@@ -10,7 +12,7 @@ from unittest.mock import patch
 import pytest
 
 from blackvuesync.server.progress import ProgressPublisher
-from blackvuesync.server.scheduler import _JOB_ID, init_scheduler
+from blackvuesync.server.scheduler import _JOB_ID, build_cron_trigger, init_scheduler
 from blackvuesync.settings import SettingsStore
 
 
@@ -108,6 +110,67 @@ class TestInitScheduler:
             assert new_trigger is not original
         finally:
             scheduler.shutdown(wait=False)
+
+    def test_invalid_stored_schedule_falls_back_to_default(
+        self, settings_path: Path
+    ) -> None:
+        """a stored schedule apscheduler rejects must not crash startup."""
+        _make_store(settings_path)
+        raw = json.loads(settings_path.read_text(encoding="utf-8"))
+        raw["schedule"].update(cron_expression="61 * * * *", timezone="Foo/Bar")
+        settings_path.write_text(json.dumps(raw), encoding="utf-8")
+        os.chmod(settings_path, 0o600)
+        store = SettingsStore(settings_path)
+
+        scheduler = init_scheduler(store, ProgressPublisher())
+        try:
+            trigger = scheduler.get_job(_JOB_ID).trigger
+            assert "minute='*/15'" in str(trigger)
+            assert "UTC" in repr(trigger)
+        finally:
+            scheduler.shutdown(wait=False)
+
+
+def _next_fire(expression: str, after: datetime.datetime) -> datetime.datetime:
+    """returns the next fire time of expression strictly after `after`."""
+    trigger = build_cron_trigger(expression, "UTC")
+    # apscheduler returns a fire time >= now, so a second is added
+    fire: datetime.datetime | None = trigger.get_next_fire_time(
+        None, after + datetime.timedelta(seconds=1)
+    )
+    assert fire is not None
+    return fire
+
+
+class TestBuildCronTrigger:
+    """tests that triggers follow standard cron semantics."""
+
+    # a wednesday
+    _START = datetime.datetime(2026, 9, 23, 12, 0, tzinfo=datetime.timezone.utc)
+
+    @pytest.mark.parametrize("expression", ["0 3 * * 0", "0 3 * * 7", "0 3 * * sun"])
+    def test_day_zero_and_seven_fire_on_sunday(self, expression: str) -> None:
+        fire = _next_fire(expression, self._START)
+        assert fire.weekday() == 6  # python: monday=0, sunday=6
+        assert (fire.hour, fire.minute) == (3, 0)
+
+    def test_weekday_range_fires_monday_to_friday(self) -> None:
+        fires: list[datetime.datetime] = []
+        after = self._START
+        for _ in range(10):
+            after = _next_fire("0 3 * * 1-5", after)
+            fires.append(after)
+        assert {f.weekday() for f in fires} == {0, 1, 2, 3, 4}
+
+    def test_restricted_day_of_month_and_week_are_ored(self) -> None:
+        """cron fires when either day of month or day of week matches."""
+        fires: list[datetime.datetime] = []
+        after = self._START
+        for _ in range(6):
+            after = _next_fire("0 3 1 * mon", after)
+            fires.append(after)
+        assert any(f.day == 1 and f.weekday() != 0 for f in fires)
+        assert any(f.weekday() == 0 and f.day != 1 for f in fires)
 
 
 class TestScheduledRun:

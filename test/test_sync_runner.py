@@ -336,3 +336,52 @@ def test_do_sync_records_failure_row_when_sync_raises(
     assert rows[0].success == 0
     assert rows[0].exit_code == 1
     assert rows[0].failures.get("network", 0) >= 1
+
+
+def test_do_sync_fails_without_calling_sync_when_address_is_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import types
+
+    import blackvuesync.server.sync_runner as runner
+    import blackvuesync.sync as _sync
+    from blackvuesync.server.progress import ProgressPublisher
+    from blackvuesync.server.stats_store import StatsStore
+
+    destination = tmp_path / "rec"
+    destination.mkdir()
+    called: list[bool] = []
+    monkeypatch.setattr(_sync, "sync", lambda *_a, **_k: called.append(True))
+
+    settings = types.SimpleNamespace(
+        connection=types.SimpleNamespace(address="", timeout_seconds=10.0),
+        system=types.SimpleNamespace(destination=str(destination), dry_run=False),
+        sync=types.SimpleNamespace(
+            grouping="none",
+            priority="date",
+            include=(),
+            exclude=(),
+            retry_failed_after="1d",
+            skip_metadata=(),
+            affinity_key=None,
+        ),
+        retention=types.SimpleNamespace(keep="", max_used_disk_percent=90),
+        metrics=types.SimpleNamespace(
+            file=None,
+            pushgateway_url=None,
+            job="blackvuesync",
+            instance=None,
+            state_file=str(tmp_path / "metrics-state.json"),
+        ),
+        stats=types.SimpleNamespace(retention_days=365),
+    )
+    store = StatsStore(str(tmp_path / "stats.db"))
+    pub = ProgressPublisher()
+
+    runner._do_sync(settings, pub, job_id="abc", stats_store=store)
+
+    assert not called
+    assert pub.snapshot().state == "failed"
+    rows = store.query()
+    assert len(rows) == 1
+    assert rows[0].success == 0

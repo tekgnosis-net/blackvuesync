@@ -70,17 +70,25 @@ SECTION_FIELD_SPECS: dict[str, tuple[FieldSpec, ...]] = {
             options=("none", "daily", "weekly", "monthly", "yearly"),
         ),
         FieldSpec(
-            "include", "Include patterns", "lines", "lines", help="one glob per line"
+            "include",
+            "Include recordings",
+            "lines",
+            "lines",
+            help="one type or type+direction code per line, e.g. P or NF",
         ),
         FieldSpec(
-            "exclude", "Exclude patterns", "lines", "lines", help="one glob per line"
+            "exclude",
+            "Exclude recordings",
+            "lines",
+            "lines",
+            help="one type or type+direction code per line, e.g. P or NF",
         ),
         FieldSpec(
             "retry_failed_after",
             "Retry failed after",
             "text",
             "text",
-            help="duration, e.g. 1d",
+            help="duration in s, h, d or w, e.g. 12h or 1d",
         ),
         FieldSpec(
             "skip_metadata",
@@ -99,7 +107,11 @@ SECTION_FIELD_SPECS: dict[str, tuple[FieldSpec, ...]] = {
     ),
     "retention": (
         FieldSpec(
-            "keep", "Keep recordings for", "text", "text", help="duration, e.g. 2w"
+            "keep",
+            "Keep recordings for",
+            "text",
+            "text",
+            help="days or weeks, e.g. 30d or 2w; empty keeps forever",
         ),
         FieldSpec("max_used_disk_percent", "Max used disk (%)", "number", "number"),
     ),

@@ -142,6 +142,11 @@ def _do_sync(  # pylint: disable=too-many-locals,too-many-statements
             last_successful_file_pull_timestamp_seconds=load_metrics_state(state_file),
         )
 
+        if not address:
+            raise UserWarning(
+                "dashcam address is not set; set it under Settings > Connection"
+            )
+
         _apply_sync_settings(settings)
 
         ensure_destination(destination)
