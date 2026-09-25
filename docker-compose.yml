@@ -1,79 +1,66 @@
-version: '3.0'
+# see docs/guide/installation.md. environment variables below are read only on
+# the first start, to create /config/settings.json; afterwards settings are
+# changed in the web ui (Settings page). PUID, PGID, TZ and
+# BLACKVUESYNC_TRUST_PROXY are read on every start.
 services:
   blackvuesync:
-    image: ghcr.io/tekgnosis-net/blackvuesync
+    image: ghcr.io/tekgnosis-net/blackvuesync:latest
     container_name: blackvuesync
     restart: unless-stopped
     ports:
       - "8080:8080"
     volumes:
-      # Recording download destination. Change only the part before the first colon.
+      # recording download destination; changes only the part before the colon.
       - /mnt/dashcam:/recordings:rw
-      # Settings storage (settings.json lives here). Change the host path as needed.
+      # settings.json, stats.db and logs/ live here; keeps them across upgrades.
       - ./config:/config:rw
     environment:
-      # Sync is scheduler-driven via settings.schedule.cron_expression (default
-      # */15 * * * *). On-demand triggers go through POST /api/sync/now.
+      # dashcam ip address or hostname.
+      ADDRESS: dashcam.example.net
 
-      # Dashcam address
-      # ADDRESS: dashcam.example.net
-
-      # Set these to the desired destination directory's user id and group id.
+      # user and group ids that own the recordings and config directories.
       PUID: 1000
       PGID: 1000
 
-      # Set to the same timezone as the dashcam. Note that BlackVue dashcams do
-      # not respect Daylight Savings Time, so their clock needs to be adjusted
-      # periodically. For the complete list of possible values, see:
-      # https://en.wikipedia.org/wiki/List_of_tz_database_time_zones
+      # container clock timezone; matches the dashcam. blackvue dashcams do not
+      # follow daylight saving time, so their clock needs periodic adjustment.
       TZ: America/New_York
 
-      # Priority to download recordings. Pick "date" to download from oldest to
-      # newest; pick "rdate" to download from oldest to newest; pick "type" to
-      # download manual, event (all types), normal and parking recordings in
-      # that order.
+      # timezone the sync schedule runs in (defaults to UTC, not TZ).
+      BLACKVUESYNC_TIMEZONE: America/New_York
+
+      # cron schedule for syncs.
+      BLACKVUESYNC_SCHEDULE: '*/15 * * * *'
+
+      # skips the first-run page when set (12+ characters). removes it after
+      # the first start.
+      # BLACKVUESYNC_ADMIN_PASSWORD: change-me-please
+
+      # set to 1 behind an https reverse proxy.
+      # BLACKVUESYNC_TRUST_PROXY: '1'
+
+      # "date" oldest first, "rdate" newest first, "type" manual, events,
+      # normal, then parking.
       PRIORITY: date
 
-      # Groups downloaded recordings in directories: 'daily', 'weekly',
-      # 'monthly', 'yearly' and 'none' are supported.
+      # "daily", "weekly", "monthly", "yearly" or "none".
       GROUPING: none
 
-      # Retention period of downloaded recordings. Recordings prior to the
-      # retention period will be removed from the destination. Accepted units
-      # are 'd' for days and 'w' for weeks. If no unit is indicated, days are
-      # assumed.
+      # deletes recordings older than this ("d" days, "w" weeks).
       KEEP: 2w
 
-      # Stops downloading if the amount of used disk space exceeds the indicated
-      # percentage value.
+      # stops downloading above this used-disk percentage.
       MAX_USED_DISK: 90
 
-      # Sets the timeout in seconds for connecting to the dashcam.
+      # dashcam connection timeout in seconds.
       TIMEOUT: 10.0
 
-      # Set to a number greater than zero to increase logging verbosity.
+      # 0 normal, 1 verbose, 2 debug.
       VERBOSE: 0
 
-      # Set to any value to quiet down logs: only unexpected errors will be
-      # logged.
-      QUIET: ''
-
-      # Sets log output format. Supported values are "text" and "json".
+      # "text" or "json".
       LOG_FORMAT: text
 
-      # If set, writes Prometheus text format metrics to this path.
-      METRICS_FILE: ''
-
-      # If set, pushes Prometheus text format metrics to this Pushgateway URL.
-      METRICS_PUSHGATEWAY_URL: ''
-
-      # Pushgateway grouping key values.
-      METRICS_JOB: blackvuesync
-      METRICS_INSTANCE: ''
-
-      # If set, stores cross-run metrics state at this path.
-      METRICS_STATE_FILE: ''
-
-      # If set to any value, makes it so that the script communicates what it
-      # would do without actually doing anything.
-      DRY_RUN: ''
+      # optional prometheus metrics.
+      # METRICS_FILE: /config/blackvuesync.prom
+      # METRICS_PUSHGATEWAY_URL: http://pushgateway:9091

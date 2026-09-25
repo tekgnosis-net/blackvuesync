@@ -21,11 +21,14 @@ LABEL org.opencontainers.image.source="https://github.com/tekgnosis-net/blackvue
 LABEL org.opencontainers.image.licenses="MIT"
 LABEL org.opencontainers.image.authors="Alessandro Colomba"
 
-VOLUME ["/recordings"]
-
 RUN apk add --update bash python3 shadow su-exec tzdata \
     && rm -rf /var/cache/apk/* \
-    && useradd -UMr dashcam
+    && useradd -UMr dashcam \
+    && mkdir -p /config \
+    && chown dashcam:dashcam /config
+
+# declared after /config is created; later build steps must not write here.
+VOLUME ["/recordings", "/config"]
 
 # copies the dependency venv built in the previous stage. both stages share the
 # same alpine base, so the venv's interpreter matches the system python3 here.
