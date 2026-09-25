@@ -95,3 +95,35 @@ def test_journey_chain_gap_boundary_inclusive_at_120s() -> None:
     # chain.
     chain = journey_chain([at(0), at(120), at(241)], "ts_0", "N")
     assert [e.base_filename for e in chain] == ["ts_0", "ts_120"]
+
+
+def test_upload_flag_keeps_real_filenames(tmp_path: Path) -> None:
+    # sync.py stores the .thm/.gps/.3gf of a flagged recording without the flag
+    _touch(tmp_path, "20260607_101500_NFL.mp4")
+    _touch(tmp_path, "20260607_101500_NRS.mp4")
+    _touch(tmp_path, "20260607_101500_NR.thm")
+    _touch(tmp_path, "20260607_101500_N.gps")
+    _touch(tmp_path, "20260607_101500_N.3gf")
+    (e,) = list_recordings(str(tmp_path), "none")
+    assert e.directions == ("F", "R")
+    assert e.video_files == (
+        ("F", "20260607_101500_NFL.mp4"),
+        ("R", "20260607_101500_NRS.mp4"),
+    )
+    assert e.thumb_files == (("R", "20260607_101500_NR.thm"),)
+    assert e.has_thm is True
+    assert e.has_gps is True and e.has_3gf is True
+
+
+def test_flagged_thumbnail_name_is_accepted(tmp_path: Path) -> None:
+    _touch(tmp_path, "20260607_101500_NFL.mp4")
+    _touch(tmp_path, "20260607_101500_NFL.thm")
+    (e,) = list_recordings(str(tmp_path), "none")
+    assert e.thumb_files == (("F", "20260607_101500_NFL.thm"),)
+
+
+def test_unflagged_video_preferred_when_both_present(tmp_path: Path) -> None:
+    _touch(tmp_path, "20260607_101500_NFL.mp4")
+    _touch(tmp_path, "20260607_101500_NF.mp4")
+    (e,) = list_recordings(str(tmp_path), "none")
+    assert e.video_files == (("F", "20260607_101500_NF.mp4"),)

@@ -1,7 +1,10 @@
 """enumerates downloaded recordings and computes auto-advance journey chains.
 
 a recording instant is keyed by (base_filename, type); front/rear .mp4 share it
-and differ by direction, and share one .gps/.3gf. built on sync.to_recording.
+and differ by direction, and share one .gps/.3gf. an .mp4 may carry an upload
+flag (`_NFL.mp4`), so the actual on-disk video/thumbnail filenames are kept per
+direction; sync.py stores the .thm/.gps/.3gf without the flag. built on
+sync.to_recording.
 """
 
 from __future__ import annotations
@@ -30,14 +33,34 @@ class RecordingEntry:
     has_3gf: bool
     has_thm: bool
     rel_dir: str  # directory relative to destination ("" when ungrouped)
+    # (direction, filename) pairs of the on-disk .mp4 / .thm, sorted by direction
+    video_files: tuple[tuple[str, str], ...] = ()
+    thumb_files: tuple[tuple[str, str], ...] = ()
 
 
 @dataclasses.dataclass
 class _InstantSlot:
-    """accumulates directions while scanning for one recording instant."""
+    """accumulates per-direction .mp4 filenames for one recording instant."""
 
     dt: datetime.datetime
-    dirs: set[str] = dataclasses.field(default_factory=set)
+    videos: dict[str, list[str]] = dataclasses.field(default_factory=dict)
+
+
+def _pick_video(names: list[str]) -> str:
+    """picks one .mp4 per direction, preferring the unflagged (shortest) name."""
+    return min(names, key=lambda n: (len(n), n))
+
+
+def _thumb_for(rel_dir: str, video: str, plain_stem: str, present: set[str]) -> str:
+    """returns the .thm filename for a video, or "" when none is on disk.
+
+    sync.py names the thumbnail without the upload flag; a flagged thumbnail
+    (same stem as the video) is also accepted.
+    """
+    for stem in dict.fromkeys((plain_stem, video[: -len(".mp4")])):
+        if os.path.join(rel_dir, f"{stem}.thm") in present:
+            return f"{stem}.thm"
+    return ""
 
 
 def _build_entry(
@@ -48,7 +71,13 @@ def _build_entry(
     present: set[str],
 ) -> RecordingEntry:
     """constructs a RecordingEntry from a collected slot and present-file set."""
-    dirs = sorted(slot.dirs)
+    dirs = sorted(slot.videos)
+    videos = tuple((d, _pick_video(slot.videos[d])) for d in dirs)
+    thumbs = tuple(
+        (d, thm)
+        for d, video in videos
+        if (thm := _thumb_for(rel_dir, video, f"{base}_{rtype}{d}", present))
+    )
     return RecordingEntry(
         base_filename=base,
         type=rtype,
@@ -56,10 +85,10 @@ def _build_entry(
         directions=tuple(dirs),
         has_gps=os.path.join(rel_dir, f"{base}_{rtype}.gps") in present,
         has_3gf=os.path.join(rel_dir, f"{base}_{rtype}.3gf") in present,
-        has_thm=any(
-            os.path.join(rel_dir, f"{base}_{rtype}{d}.thm") in present for d in dirs
-        ),
+        has_thm=bool(thumbs),
         rel_dir=rel_dir,
+        video_files=videos,
+        thumb_files=thumbs,
     )
 
 
@@ -81,7 +110,7 @@ def list_recordings(destination: str, grouping: str) -> list[RecordingEntry]:
                 continue  # only .mp4 names match to_recording
             key = (rel_dir, rec.base_filename, rec.type)
             slot = grouped.setdefault(key, _InstantSlot(dt=rec.datetime))
-            slot.dirs.add(rec.direction)
+            slot.videos.setdefault(rec.direction, []).append(name)
 
     entries = [
         _build_entry(rel_dir, base, rtype, slot, present)

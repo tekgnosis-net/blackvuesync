@@ -34,6 +34,15 @@ def _media_url(rel_dir: str, filename: str) -> str:
     return f"/media/{rel}"
 
 
+def _thumb_url(entry: RecordingEntry) -> str | None:
+    """returns the thumbnail URL of a direction that has one, preferring front."""
+    thumbs = dict(entry.thumb_files)
+    if not thumbs:
+        return None
+    direction = "F" if "F" in thumbs else next(iter(thumbs))
+    return _media_url(entry.rel_dir, thumbs[direction])
+
+
 def _segment_dict(entry: RecordingEntry) -> dict[str, object]:
     """serializes one recording instant for the API."""
     return {
@@ -44,18 +53,8 @@ def _segment_dict(entry: RecordingEntry) -> dict[str, object]:
         "has_gps": entry.has_gps,
         "has_3gf": entry.has_3gf,
         "has_thm": entry.has_thm,
-        "videos": {
-            d: _media_url(entry.rel_dir, f"{entry.base_filename}_{entry.type}{d}.mp4")
-            for d in entry.directions
-        },
-        "thumb": (
-            _media_url(
-                entry.rel_dir,
-                f"{entry.base_filename}_{entry.type}{entry.directions[0]}.thm",
-            )
-            if entry.has_thm and entry.directions
-            else None
-        ),
+        "videos": {d: _media_url(entry.rel_dir, f) for d, f in entry.video_files},
+        "thumb": _thumb_url(entry),
     }
 
 

@@ -21,6 +21,18 @@ function tsLabel(ts) {
   return new Date(Number(ts) * 1000).toLocaleString();
 }
 
+function redirectToLogin() {
+  location.assign("/login?next=" + encodeURIComponent(location.pathname));
+}
+
+// true when the session expired: 401 json, or a followed redirect to /login.
+function isAuthFailure(resp) {
+  return (
+    resp.status === 401 ||
+    (resp.redirected && new URL(resp.url).pathname === "/login")
+  );
+}
+
 function failureDatasets(points) {
   return FAILURE_REASONS.map((reason) => ({
     label: reason,
@@ -47,27 +59,51 @@ document.addEventListener("alpine:init", () => {
     },
 
     async load() {
-      const data = await this.fetchSeries(this.range);
+      const { data, error } = await this.fetchSeries(this.range);
       if (!data) {
+        // charts keep their last state; the banner says why they are stale
+        this.showError(error ? "Could not load statistics (" + error + ")." : "");
         return;
       }
+      this.showError("");
       this.renderSummary(data.summary);
       this.renderCharts(data);
     },
 
+    showError(message) {
+      const el = this.$root.querySelector("[data-stats-error]");
+      if (!el) return;
+      el.textContent = message;
+      el.hidden = !message;
+    },
+
+    // returns { data } on success, { error } on failure, or {} after
+    // navigating to /login on an expired session.
     async fetchSeries(range) {
+      let resp;
       try {
-        const resp = await fetch(
+        resp = await fetch(
           "/api/stats/series?range=" + encodeURIComponent(range),
           { headers: { Accept: "application/json" } },
         );
-        if (!resp.ok) {
-          return null;
-        }
-        return await resp.json();
       } catch {
-        // network error: keep the charts in their last state
-        return null;
+        return { error: "network error" };
+      }
+      if (isAuthFailure(resp)) {
+        redirectToLogin();
+        return {};
+      }
+      if (!resp.ok) {
+        return { error: "HTTP " + resp.status };
+      }
+      const type = resp.headers.get("Content-Type") || "";
+      if (!type.includes("application/json")) {
+        return { error: "unexpected response" };
+      }
+      try {
+        return { data: await resp.json() };
+      } catch {
+        return { error: "malformed response" };
       }
     },
 

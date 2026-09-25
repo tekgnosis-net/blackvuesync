@@ -12,6 +12,32 @@ function csrfToken() {
   return el ? el.content : "";
 }
 
+function redirectToLogin() {
+  location.assign("/login?next=" + encodeURIComponent(location.pathname));
+}
+
+// true when the session expired: 401 json, or a followed redirect to /login.
+function isAuthFailure(resp) {
+  return (
+    resp.status === 401 ||
+    (resp.redirected && new URL(resp.url).pathname === "/login")
+  );
+}
+
+// the json "error" field when present, else the HTTP status.
+async function errorText(resp) {
+  const type = resp.headers.get("Content-Type") || "";
+  if (type.includes("application/json")) {
+    try {
+      const body = await resp.json();
+      if (body && body.error) return String(body.error);
+    } catch {
+      /* malformed body; fall back to the status */
+    }
+  }
+  return "HTTP " + resp.status;
+}
+
 document.addEventListener("alpine:init", () => {
   Alpine.data("dashboardSync", () => ({
     progress: {
@@ -78,11 +104,18 @@ document.addEventListener("alpine:init", () => {
     },
 
     async syncNow() {
-      const resp = await this.post("/api/sync/now");
+      const resp = await this.post("/api/sync/now", "Sync could not start");
       if (resp && (resp.status === 202 || resp.status === 409)) {
         this.setState("running");
         this.openStream();
       }
+    },
+
+    showActionError(message) {
+      const el = this.$refs.actionError;
+      if (!el) return;
+      el.textContent = message;
+      el.hidden = !message;
     },
 
     confirmStop() {
@@ -93,12 +126,15 @@ document.addEventListener("alpine:init", () => {
     },
     async doStop() {
       this.$refs.stopDialog.close();
-      await this.post("/api/sync/stop"); // SSE will report the terminal state
+      await this.post("/api/sync/stop", "Stop failed"); // SSE reports the terminal state
     },
 
     async togglePause() {
       const path = this.paused ? "/api/schedule/resume" : "/api/schedule/pause";
-      const resp = await this.post(path);
+      const resp = await this.post(
+        path,
+        this.paused ? "Resume failed" : "Pause failed"
+      );
       if (resp?.ok) {
         location.assign(location.pathname); // reflect the new Pause/Resume label
       }
@@ -160,16 +196,30 @@ document.addEventListener("alpine:init", () => {
       }
     },
 
-    async post(path) {
+    // posts to path; returns the response, or null after surfacing a network
+    // error. non-2xx responses (except 409 "already running") are shown as
+    // "<label>: <reason>"; an expired session navigates to /login.
+    async post(path, label) {
+      let resp;
       try {
-        return await fetch(path, {
+        resp = await fetch(path, {
           method: "POST",
           headers: { "X-CSRFToken": csrfToken() },
         });
       } catch {
-        /* fetch failed (network error); caller guards against null return */
+        this.showActionError(label + ": network error");
         return null;
       }
+      if (isAuthFailure(resp)) {
+        redirectToLogin();
+        return null;
+      }
+      if (resp.ok || resp.status === 409) {
+        this.showActionError("");
+      } else {
+        this.showActionError(label + ": " + (await errorText(resp)));
+      }
+      return resp;
     },
   }));
 });

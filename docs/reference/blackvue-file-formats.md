@@ -38,6 +38,16 @@ All artifacts of one recording instant share the base `YYYYMMDD_HHMMSS_<type>`:
 So front and rear videos pair by sharing base+type and differing only by the
 direction letter; they share a single `.gps` and `.3gf`.
 
+### Upload-flag filenames
+
+A video listed with an upload flag (e.g. `20260607_101500_NFL.mp4`) is stored under
+that exact name, but `sync.py` stores its thumbnail and sidecars **without** the flag
+(`20260607_101500_NF.thm`, `20260607_101500_N.gps`, `20260607_101500_N.3gf`). The
+viewer index (`blackvuesync/server/viewer_index.py`) therefore keeps the real
+on-disk `.mp4` name per direction and builds video URLs from it; it looks up the
+thumbnail under the unflagged name first, then the flagged one. When both a flagged
+and an unflagged video exist for one direction, the unflagged one is used.
+
 ## Recording-type codes
 
 | Code | Meaning |
@@ -122,9 +132,26 @@ Front and rear are separate files sharing base+type, differing by direction.
 
 `.gps` timestamps are **absolute epoch-ms**; `.3gf` timestamps are **ms-from-start**.
 Both reduce to "elapsed seconds from recording start", which maps directly to HTML5
-`video.currentTime`. Across auto-advanced consecutive segments, the absolute GPS
-epoch provides a continuous wall-clock timeline so the map path and telemetry stay
-coherent rather than resetting per segment.
+`video.currentTime`:
+
+- **GPS t=0** is the earliest timestamp of *any* recognized `RMC`/`GGA` sentence in
+  the file, with or without a fix. Sentences written before the receiver has a fix
+  still mark the start of the recording, so the first fixed point keeps its real
+  offset into the video instead of being pulled to 0. Non-finite values (`nan`,
+  `inf`) are dropped: a non-finite speed becomes `null`, a non-finite coordinate
+  skips the point.
+- **G-sensor t** is the record's ms-from-start divided by 1000.
+
+Each telemetry point is kept with the index of its segment and its segment-local
+time. The map marker and speed readout use only points of the segment that is
+playing, picking the one nearest to `video.currentTime`; points of other segments
+are never matched, so the marker cannot jump into a neighbouring segment.
+
+Across an auto-advanced journey (and in `full` journey mode, where the whole
+chain's telemetry is prefetched), segments are laid end to end on one session
+timeline to order the accumulated map path and G-sensor chart. A segment's length
+on that timeline is its video duration (from the video's `loadedmetadata`), falling
+back to its telemetry span when the video has not been loaded yet, then to 60 s.
 
 ## References
 

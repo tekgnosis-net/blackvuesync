@@ -8,6 +8,7 @@ format (see docs/reference/blackvue-file-formats.md): each line is
 from __future__ import annotations
 
 import dataclasses
+import math
 import re
 
 # [epoch-ms] + $ + G + any talker letter + RMC|GGA + comma + the field body.
@@ -18,7 +19,7 @@ _SENTENCE_RE = re.compile(
 
 @dataclasses.dataclass(frozen=True)
 class GpsPoint:
-    """one GPS fix: elapsed seconds from start, decimal lat/lon, speed in knots."""
+    """one GPS fix: seconds from the file's first sentence, lat/lon, knots."""
 
     t: float
     lat: float
@@ -31,6 +32,8 @@ def _dm_to_decimal(value: str, hemisphere: str) -> float | None:
     if not value:
         return None
     raw = float(value)
+    if not math.isfinite(raw):
+        return None
     degrees = int(raw // 100)
     minutes = raw - degrees * 100
     decimal = degrees + minutes / 60.0
@@ -47,6 +50,8 @@ def _parse_rmc(fields: list[str]) -> tuple[float, float, float | None] | None:
     if lat is None or lon is None:
         return None
     speed = float(fields[6]) if fields[6] else None
+    if speed is not None and not math.isfinite(speed):
+        speed = None  # nan/inf would serialize as invalid JSON
     return lat, lon, speed
 
 
@@ -66,12 +71,16 @@ def parse_gps(text: str) -> list[GpsPoint]:
     """parses .gps text into GpsPoints, ascending by time, one per epoch-ms.
 
     RMC is preferred (it carries speed); a GGA-only timestamp is used as a
-    position fallback. invalid / no-fix / unparseable lines are skipped.
+    position fallback. invalid / no-fix / unparseable lines are skipped. t=0 is
+    the earliest timestamp of any matched sentence, fix or not, since the file
+    starts with the video even before the receiver has a fix.
     """
     by_ms: dict[int, tuple[float, float, float | None]] = {}
     rmc_ms: set[int] = set()
+    first_ms: int | None = None
     for match in _SENTENCE_RE.finditer(text):
         ms = int(match.group("ms"))
+        first_ms = ms if first_ms is None else min(first_ms, ms)
         fields = match.group("fields").split(",")
         try:
             if match.group("kind") == "RMC":
@@ -85,9 +94,8 @@ def parse_gps(text: str) -> list[GpsPoint]:
                     by_ms[ms] = parsed
         except ValueError:
             continue  # one malformed sentence does not abort the whole parse
-    if not by_ms:
+    if first_ms is None:
         return []
-    first_ms = min(by_ms)
     return [
         GpsPoint((ms - first_ms) / 1000.0, lat, lon, speed)
         for ms, (lat, lon, speed) in sorted(by_ms.items())

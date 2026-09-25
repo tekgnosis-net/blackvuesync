@@ -113,3 +113,65 @@ def test_viewer_page_renders(client_and_dest: Any) -> None:
     assert b"js/leaflet.js" in resp.data
     assert b'id="viewer-app"' in resp.data
     assert b"data-journey-mode" in resp.data
+
+
+def _recording(client: Any, base: str) -> dict[str, Any]:
+    body = json.loads(client.get("/api/viewer/recordings").data)
+    return next(
+        r
+        for day in body["days"]
+        for r in day["recordings"]
+        if r["base_filename"] == base
+    )
+
+
+def test_upload_flag_urls_use_real_filenames(client_and_dest: Any) -> None:
+    client, dest = client_and_dest
+    (dest / "20260607_103000_EFL.mp4").write_bytes(b"x")
+    (dest / "20260607_103000_ERS.mp4").write_bytes(b"x")
+    (dest / "20260607_103000_EF.thm").write_bytes(b"x")
+    (dest / "20260607_103000_E.gps").write_text(
+        "[1000]$GNRMC,055056.00,A,3348.10000,S,15101.10000,E,0.000,,070626,,,A,V*06\r\n"
+    )
+    rec = _recording(client, "20260607_103000")
+    assert rec["videos"] == {
+        "F": "/media/20260607_103000_EFL.mp4",
+        "R": "/media/20260607_103000_ERS.mp4",
+    }
+    assert rec["thumb"] == "/media/20260607_103000_EF.thm"
+    assert rec["has_thm"] is True and rec["has_gps"] is True
+    for url in (*rec["videos"].values(), rec["thumb"]):
+        assert client.get(url).status_code == 200
+    gps = client.get("/api/viewer/recordings/20260607_103000_E/gps")
+    assert gps.status_code == 200
+
+
+def test_thumb_url_uses_direction_that_has_thm(client_and_dest: Any) -> None:
+    client, dest = client_and_dest
+    (dest / "20260607_101500_NR.thm").write_bytes(b"x")
+    rec = _recording(client, "20260607_101500")
+    assert rec["thumb"] == "/media/20260607_101500_NR.thm"
+    assert client.get(rec["thumb"]).status_code == 200
+    (dest / "20260607_101500_NF.thm").write_bytes(b"x")
+    rec = _recording(client, "20260607_101500")
+    assert rec["thumb"] == "/media/20260607_101500_NF.thm"  # front preferred
+
+
+def test_thumb_none_without_thm(client_and_dest: Any) -> None:
+    client, _ = client_and_dest
+    rec = _recording(client, "20260607_101600")
+    assert rec["thumb"] is None and rec["has_thm"] is False
+
+
+def test_gps_nan_speed_is_valid_json(client_and_dest: Any) -> None:
+    client, dest = client_and_dest
+    (dest / "20260607_101500_N.gps").write_text(
+        "[1000]$GNRMC,055056.00,A,3348.10000,S,15101.10000,E,nan,,070626,,,A,V*06\r\n"
+    )
+    resp = client.get("/api/viewer/recordings/20260607_101500_N/gps")
+    body = json.loads(resp.data, parse_constant=_reject_constant)
+    assert body["points"][0]["speed"] is None
+
+
+def _reject_constant(name: str) -> None:
+    raise ValueError(f"invalid JSON constant {name}")

@@ -9,6 +9,33 @@ function csrfToken() {
   return el ? el.content : "";
 }
 
+function redirectToLogin() {
+  location.assign("/login?next=" + encodeURIComponent(location.pathname));
+}
+
+// parses a json body; null when the response is not json or is malformed.
+async function readJson(resp) {
+  const type = resp.headers.get("Content-Type") || "";
+  if (!type.includes("application/json")) return null;
+  try {
+    return await resp.json();
+  } catch {
+    return null;
+  }
+}
+
+// true when the session expired: a 401 AUTH_REQUIRED, or a followed redirect
+// to /login. other 401s (e.g. a wrong current password) are not auth failures.
+function isAuthFailure(resp, data) {
+  if (resp.redirected && new URL(resp.url).pathname === "/login") return true;
+  return resp.status === 401 && (!data || data.code === "AUTH_REQUIRED");
+}
+
+// the json "error" field when present, else the HTTP status.
+function failureText(resp, data) {
+  return data?.error ? String(data.error) : "HTTP " + resp.status;
+}
+
 // builds a typed json object from a section/form's [data-field] inputs.
 function collectFields(root) {
   const out = {};
@@ -83,21 +110,22 @@ document.addEventListener("alpine:init", () => {
       if (section === "auth" && !this.confirmModeChange(payload)) return;
       const resp = await this.send(`/api/settings/${section}`, payload, "PATCH");
       if (!resp) {
-        this.setErrors(section, ["save failed; please retry"]);
+        this.setErrors(section, ["save failed (network error); please retry"]);
         return;
       }
-      if (resp.status === 200) {
-        const data = await resp.json();
+      const data = await readJson(resp);
+      if (isAuthFailure(resp, data)) {
+        redirectToLogin();
+      } else if (resp.status === 200 && data) {
         this.setErrors(section, []);
         this.showToast(section, this.tierMessage(data.tier));
-      } else if (resp.status === 422) {
-        const data = await resp.json();
-        this.setErrors(
-          section,
-          (data.details?.field_errors || []).map((e) => e.message)
-        );
+      } else if (resp.status === 422 && data) {
+        const messages = (data.details?.field_errors || []).map((e) => e.message);
+        this.setErrors(section, messages.length ? messages : [failureText(resp, data)]);
       } else {
-        this.setErrors(section, ["save failed; please retry"]);
+        this.setErrors(section, [
+          "save failed (" + failureText(resp, data) + "); please retry",
+        ]);
       }
     },
 
@@ -145,22 +173,24 @@ document.addEventListener("alpine:init", () => {
         "POST"
       );
       if (!resp) {
-        this.setErrors("password", ["could not change password"]);
+        this.setErrors("password", ["could not change password (network error)"]);
         return;
       }
-      if (resp.status === 200) {
+      const data = await readJson(resp);
+      if (isAuthFailure(resp, data)) {
+        redirectToLogin();
+      } else if (resp.status === 200) {
         this.setErrors("password", []);
         this.$refs.pwDialog.close();
-      } else if (resp.status === 422) {
-        const data = await resp.json();
-        this.setErrors(
-          "password",
-          (data.details?.field_errors || []).map((e) => e.message)
-        );
+      } else if (resp.status === 422 && data) {
+        const messages = (data.details?.field_errors || []).map((e) => e.message);
+        this.setErrors("password", messages.length ? messages : [failureText(resp, data)]);
       } else if (resp.status === 401) {
         this.setErrors("password", ["current password is incorrect"]);
       } else {
-        this.setErrors("password", ["could not change password"]);
+        this.setErrors("password", [
+          "could not change password (" + failureText(resp, data) + ")",
+        ]);
       }
     },
 
@@ -171,7 +201,22 @@ document.addEventListener("alpine:init", () => {
         )
       )
         return;
-      await this.send("/api/auth/sessions", null, "DELETE");
+      const resp = await this.send("/api/auth/sessions", null, "DELETE");
+      if (!resp) {
+        this.setErrors("auth", ["could not rotate sessions (network error)"]);
+        return;
+      }
+      const data = await readJson(resp);
+      if (isAuthFailure(resp, data)) {
+        redirectToLogin();
+      } else if (resp.ok) {
+        this.setErrors("auth", []);
+        this.showToast("auth", "Session secret rotated.");
+      } else {
+        this.setErrors("auth", [
+          "could not rotate sessions (" + failureText(resp, data) + ")",
+        ]);
+      }
     },
 
     async send(path, payload, method) {

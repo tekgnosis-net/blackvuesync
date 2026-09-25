@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import dataclasses
+import json
+
 import pytest
 
 from blackvuesync.server.gps import GpsPoint, parse_gps
@@ -57,4 +60,39 @@ def test_malformed_numeric_field_is_skipped_not_fatal() -> None:
     )
     points = parse_gps(text)
     assert len(points) == 1  # the malformed sentence is skipped; the good one parses
-    assert points[0].t == 0.0  # the surviving sentence anchors elapsed time at 0
+    assert points[0].t == 1.0  # the malformed sentence still anchors t=0
+
+
+def test_time_zero_is_first_sentence_even_without_fix() -> None:
+    text = (
+        "[1000]$GNRMC,055056.00,V,,,,,,,070626,,,N*53\r\n"
+        "[1500]$GNGGA,055056.50,,,,,0,00,,,M,,M,,*00\r\n"
+        "[4000]$GNRMC,055059.00,A,3348.20000,N,15101.20000,E,1.0,,070626,,,A*00\r\n"
+    )
+    points = parse_gps(text)
+    assert [p.t for p in points] == [3.0]
+
+
+def test_out_of_order_timestamps_use_earliest_as_zero() -> None:
+    text = (
+        "[3000]$GNRMC,055059.00,A,3348.20000,N,15101.20000,E,1.0,,070626,,,A*00\r\n"
+        "[2000]$GNRMC,055058.00,V,,,,,,,070626,,,N*53\r\n"
+    )
+    assert [p.t for p in parse_gps(text)] == [1.0]
+
+
+def test_non_finite_speed_becomes_none_and_json_is_valid() -> None:
+    for bad in ("nan", "NaN", "inf", "-inf"):
+        text = (
+            "[1000]$GNRMC,055056.00,A,3348.10000,S,15101.10000,E,"
+            f"{bad},,070626,,,A*00\r\n"
+        )
+        points = parse_gps(text)
+        assert len(points) == 1
+        assert points[0].speed is None
+        json.dumps([dataclasses.asdict(p) for p in points], allow_nan=False)
+
+
+def test_non_finite_coordinate_is_skipped() -> None:
+    text = "[1000]$GNRMC,055056.00,A,inf,S,15101.10000,E,1.0,,070626,,,A*00\r\n"
+    assert parse_gps(text) == []

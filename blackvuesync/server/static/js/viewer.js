@@ -7,6 +7,7 @@ const KMH_PER_KNOT = 1.852;
 const MPH_PER_KNOT = 1.15078;
 const DRIFT_TOLERANCE = 0.15; // seconds before re-pinning the slave video
 const RECORDINGS_API = "/api/viewer/recordings";
+const DEFAULT_SEGMENT_SECONDS = 60; // blackvue writes ~1-minute segments
 
 function fmtTime(seconds) {
   const total = Math.floor(Number(seconds) || 0);
@@ -15,13 +16,42 @@ function fmtTime(seconds) {
   return mins + ":" + String(secs).padStart(2, "0");
 }
 
+function redirectToLogin() {
+  location.assign("/login?next=" + encodeURIComponent(location.pathname));
+}
+
+// true when the session expired: 401 json, or a followed redirect to /login.
+function isAuthFailure(resp) {
+  return (
+    resp.status === 401 ||
+    (resp.redirected && new URL(resp.url).pathname === "/login")
+  );
+}
+
+// fetches json; returns { data } on success or { error } with a display message.
+// an expired session navigates to /login instead.
 async function fetchJson(url) {
+  let resp;
   try {
-    const resp = await fetch(url, { headers: { Accept: "application/json" } });
-    return resp.ok ? await resp.json() : null;
+    resp = await fetch(url, { headers: { Accept: "application/json" } });
   } catch {
-    // network error: caller keeps the current state
-    return null;
+    return { error: "network error" };
+  }
+  if (isAuthFailure(resp)) {
+    redirectToLogin();
+    return { error: "session expired" };
+  }
+  if (!resp.ok) {
+    return { error: "HTTP " + resp.status };
+  }
+  const type = resp.headers.get("Content-Type") || "";
+  if (!type.includes("application/json")) {
+    return { error: "unexpected response" };
+  }
+  try {
+    return { data: await resp.json() };
+  } catch {
+    return { error: "malformed response" };
   }
 }
 
@@ -38,7 +68,7 @@ const viewer = {
   journeyMode: "progressive",
   chain: [],
   index: 0,
-  _selectSeq: 0,
+  _selectSeq: 0, // generation token: bumped per selection; stale awaits bail
 
   init() {
     this.el = document.getElementById("viewer-app");
@@ -54,14 +84,26 @@ const viewer = {
     this.initTelemetry();
   },
 
+  showError(message) {
+    const el = document.getElementById("viewer-error");
+    if (!el) return;
+    el.textContent = message;
+    el.hidden = false;
+  },
+
+  clearError() {
+    const el = document.getElementById("viewer-error");
+    if (el) el.hidden = true;
+  },
+
   async loadRecordings() {
-    const data = await fetchJson(RECORDINGS_API);
+    const { data, error } = await fetchJson(RECORDINGS_API);
     const side = document.getElementById("viewer-recordings");
     side.replaceChildren();
     if (!data) {
       const note = document.createElement("p");
       note.className = "viewer-note";
-      note.textContent = "Could not load recordings.";
+      note.textContent = "Could not load recordings (" + error + ").";
       side.append(note);
       return;
     }
@@ -106,14 +148,19 @@ const viewer = {
   async selectRecording(rec) {
     const seq = (this._selectSeq = this._selectSeq + 1);
     this.markActive(recordingKey(rec));
+    this.clearError();
     const journey = await fetchJson(
       RECORDINGS_API + "/" + recordingKey(rec) + "/journey"
     );
     if (seq !== this._selectSeq) return; // a newer selection superseded this one
-    this.chain = journey?.segments ?? [rec];
+    if (journey.error) {
+      this.showError("Could not load the journey (" + journey.error + ").");
+    }
+    this.chain = journey.data?.segments ?? [rec];
     this.index = 0;
     this.resetTelemetry();
     await this.loadSegment(0, true);
+    if (seq !== this._selectSeq) return;
     if (this.journeyMode === "full") {
       this.prefetchRest(0);
     }
@@ -122,16 +169,26 @@ const viewer = {
   async loadSegment(i, autoplay) {
     const seg = this.chain[i];
     if (!seg) return;
+    const seq = this._selectSeq;
     this.index = i;
-    this.front.src = seg.videos.F || seg.videos[seg.directions[0]];
-    if (seg.videos.R) {
-      this.rear.src = seg.videos.R;
+    // front prefers F; the rear slot shows another direction (R first), never
+    // the same file as the front.
+    const frontDir = seg.videos.F ? "F" : seg.directions.find((d) => seg.videos[d]);
+    const rearDir = ["R", ...seg.directions].find(
+      (d) => d !== frontDir && seg.videos[d]
+    );
+    this.front.src = seg.videos[frontDir];
+    if (rearDir) {
+      this.rear.src = seg.videos[rearDir];
       this.rear.style.display = "";
     } else {
+      this.rear.pause();
       this.rear.removeAttribute("src");
+      this.rear.load(); // releases the previous rear stream
       this.rear.style.display = "none";
     }
     await this.loadSegmentTelemetry(seg, i);
+    if (seq !== this._selectSeq) return; // superseded while telemetry loaded
     if (autoplay) {
       this.front.play().catch(() => {
         // autoplay may be blocked until a user gesture; ignore
@@ -160,6 +217,11 @@ const viewer = {
       this.onTick();
     });
     this.front.addEventListener("ended", () => this.onSegmentEnded());
+    this.front.addEventListener("loadedmetadata", () => {
+      if (Number.isFinite(this.front.duration) && this.front.duration > 0) {
+        this.durations[this.index] = this.front.duration;
+      }
+    });
   },
 
   bindTransport() {
@@ -198,9 +260,10 @@ const viewer = {
   pathLayer: null,
   marker: null,
   gsChart: null,
-  track: [], // accumulated {st: session-time s, lat, lon, speed} across the journey
-  gforce: [], // accumulated {st, mag} for the g-sensor chart
-  offsets: [], // per-segment duration (s); offsets[i] = duration of segment i
+  track: [], // accumulated {seg, t: segment-local s, lat, lon, speed} across the journey
+  gforce: [], // accumulated {seg, t, mag} for the g-sensor chart
+  durations: [], // per-segment video duration (s) from loadedmetadata
+  spans: [], // per-segment telemetry span (s); fallback when the video is not loaded
   loaded: null, // Set of chain indices whose telemetry has been appended (idempotency)
 
   initTelemetry() {
@@ -228,7 +291,8 @@ const viewer = {
   resetTelemetry() {
     this.track = [];
     this.gforce = [];
-    this.offsets = [];
+    this.durations = [];
+    this.spans = [];
     this.loaded = new Set();
     if (this.pathLayer) {
       this.pathLayer.remove();
@@ -240,13 +304,22 @@ const viewer = {
     }
   },
 
+  segmentDuration(k) {
+    // video duration, else telemetry span, else the nominal segment length
+    return this.durations[k] || this.spans[k] || DEFAULT_SEGMENT_SECONDS;
+  },
+
   segmentOffset(i) {
     // cumulative session time (s) at the start of segment i
     let total = 0;
     for (let k = 0; k < i; k += 1) {
-      total += this.offsets[k] || 0;
+      total += this.segmentDuration(k);
     }
     return total;
+  },
+
+  sessionTime(p) {
+    return this.segmentOffset(p.seg) + p.t;
   },
 
   async loadSegmentTelemetry(seg, i) {
@@ -254,38 +327,51 @@ const viewer = {
       return; // this segment's telemetry is already accumulated
     }
     this.loaded.add(i);
+    const seq = this._selectSeq;
     const key = recordingKey(seg);
-    const offset = this.segmentOffset(i);
     let span = 0;
+    const failed = [];
     if (seg.has_gps) {
       const gps = await fetchJson(RECORDINGS_API + "/" + key + "/gps");
-      for (const p of gps?.points ?? []) {
-        this.track.push({ st: offset + p.t, lat: p.lat, lon: p.lon, speed: p.speed });
+      if (seq !== this._selectSeq) return; // arrays now belong to another recording
+      if (gps.error) failed.push("GPS " + gps.error);
+      for (const p of gps.data?.points ?? []) {
+        this.track.push({ seg: i, t: p.t, lat: p.lat, lon: p.lon, speed: p.speed });
         span = Math.max(span, p.t);
       }
     }
     if (seg.has_3gf) {
       const gs = await fetchJson(RECORDINGS_API + "/" + key + "/gsensor");
-      for (const s of gs?.samples ?? []) {
-        this.gforce.push({ st: offset + s.t, mag: Math.hypot(s.x, s.y, s.z) });
+      if (seq !== this._selectSeq) return;
+      if (gs.error) failed.push("G-sensor " + gs.error);
+      for (const s of gs.data?.samples ?? []) {
+        this.gforce.push({ seg: i, t: s.t, mag: Math.hypot(s.x, s.y, s.z) });
         span = Math.max(span, s.t);
       }
     }
-    // duration estimate (telemetry span) offsets the next segment on the journey timeline
-    this.offsets[i] = span || 60;
+    if (failed.length) {
+      this.showError("Could not load telemetry: " + failed.join(", ") + ".");
+    }
+    this.spans[i] = span;
     this.redrawTrack();
   },
 
   async prefetchRest(fromIndex) {
     // full mode: load the remaining chain's telemetry up front (each call is
     // idempotent via the `loaded` set, so this never double-appends).
+    const seq = this._selectSeq;
     for (let i = fromIndex + 1; i < this.chain.length; i += 1) {
+      if (seq !== this._selectSeq) return;
       await this.loadSegmentTelemetry(this.chain[i], i);
     }
   },
 
   redrawTrack() {
     const leaflet = globalThis.L;
+    // segments may load out of order (prefetch vs skip); order on the journey timeline
+    const byTime = (a, b) => this.sessionTime(a) - this.sessionTime(b);
+    this.track.sort(byTime);
+    this.gforce.sort(byTime);
     const latlngs = this.track.filter((p) => p.lat != null).map((p) => [p.lat, p.lon]);
     if (latlngs.length) {
       if (this.pathLayer) {
@@ -304,12 +390,14 @@ const viewer = {
     this.gsChart.update("none");
   },
 
-  nearest(sessionTime) {
-    // nearest accumulated track point to a session time (linear scan; tracks are small)
+  nearest(seg, t) {
+    // nearest track point of segment `seg` to its local time t (linear scan;
+    // tracks are small). other segments are ignored so the marker never jumps.
     let best = null;
     let bestDelta = Infinity;
     for (const p of this.track) {
-      const delta = Math.abs(p.st - sessionTime);
+      if (p.seg !== seg) continue;
+      const delta = Math.abs(p.t - t);
       if (delta < bestDelta) {
         bestDelta = delta;
         best = p;
@@ -319,15 +407,16 @@ const viewer = {
   },
 
   onTick() {
-    const sessionTime = this.segmentOffset(this.index) + this.front.currentTime;
-    const point = this.nearest(sessionTime);
+    const point = this.nearest(this.index, this.front.currentTime);
     if (point && this.marker) {
       this.marker.setLatLng([point.lat, point.lon]);
     }
-    if (point) {
-      const knots = point.speed ?? 0;
+    const speedEl = document.getElementById("viewer-speed-value");
+    if (point && point.speed != null) {
       const factor = this.speedUnit === "mph" ? MPH_PER_KNOT : KMH_PER_KNOT;
-      document.getElementById("viewer-speed-value").textContent = String(Math.round(knots * factor));
+      speedEl.textContent = String(Math.round(point.speed * factor));
+    } else {
+      speedEl.textContent = "--";
     }
   },
 
