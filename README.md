@@ -23,8 +23,9 @@ cron-era CLI.
 ## Features
 
 * **Portable runtimes:**
-  * A [single, self-contained Python script](https://github.com/tekgnosis-net/blackvuesync/blob/main/blackvuesync.py) with no third-party dependencies. It can be copied and run anywhere, either [manually](#manual-usage) or [periodically](#unattended-usage).
-  * A [docker image](#docker) that runs a long-running web service with an internal scheduler. Supports amd64 (Intel) and arm64 (Apple Silicon, Raspberry Pi 3+ on 64-bit OS).
+  * A `blackvuesync sync` command whose sync core uses only the Python standard library. It can run [manually](#manual-usage) or [periodically](#unattended-usage).
+  * A [docker image](#docker) that runs a long-running web service with an internal scheduler and a [web UI](#web-ui). Supports amd64 (Intel) and arm64 (Apple Silicon, Raspberry Pi 3+ on 64-bit OS).
+* **Web UI**: Dashboard with live progress and sync/stop/pause controls, settings editor, live log viewer, statistics with a disk-usage forecast, and a recording viewer with GPS map and G-sensor chart.
 * **Smart**: Only downloads recordings that haven't already been downloaded.
 * **Resilient**: If a download interrupts for whatever reason, the script resumes where it left off the next time it runs. This is especially useful for possibly unreliable Wi-Fi connections from a garage.
 * **Hands-off**: Optionally retains recordings for a set amount of time. Outdated recordings are automatically removed.
@@ -84,16 +85,19 @@ Another way is by browsing to: `http://dashcam.example.net/blackvue_vod.cgi`.
 
 ### Installation
 
-BlackVue Sync is a single script, and can be obtained in a number of ways:
+BlackVue Sync can be obtained in a number of ways:
 
 * **[uv](https://docs.astral.sh/uv/)**: Run with `uvx blackvuesync <args>`, or install with `uv tool install blackvuesync` and run with `blackvuesync <args>`.
 * **[Pip](https://pypi.org/project/pip/):** Install with `pip install blackvuesync` and run with `blackvuesync <args>`.
-* **Direct:** [Download from GitHub](https://raw.githubusercontent.com/tekgnosis-net/blackvuesync/refs/heads/main/blackvuesync.py), save to the desired location, and either run it with `python3 blackvuesync.py <args>`, or mark it executable and run it with `blackvuesync.py <args>`.
+* **From source:** Clone the repository and run `python3 -m blackvuesync <args>`.
 * **GHCR:** The [Docker image](https://github.com/tekgnosis-net/blackvuesync/pkgs/container/blackvuesync) can be pulled with `docker pull ghcr.io/tekgnosis-net/blackvuesync`.
 
 The interactive instructions assume a uv or Pip installation.
 
 ### Manual Usage
+
+`blackvuesync <address> ...` is shorthand for `blackvuesync sync <address> ...`.
+`blackvuesync serve` starts the web service instead; see [Web UI](#web-ui).
 
 The dashcam address is the only required parameter. The `--dry-run` option makes it so that the script communicates what it would do without actually doing anything. Example:
 
@@ -245,6 +249,21 @@ Example:
 BlackVue Sync ships a built-in web interface accessible at
 `http://host:8080/` when running under Docker (or via `blackvuesync serve`).
 
+Pages:
+
+* **Dashboard** (`/`): sync status with live per-file progress, Sync now, Stop,
+  and Pause/Resume of the schedule, plus storage, dashcam, next-run and recent
+  activity cards.
+* **Settings** (`/settings`): edits every section of `settings.json`, changes
+  the admin password, and rotates sessions (signs everyone out).
+* **Logs** (`/logs`): live tail of the service log with level filtering.
+* **Statistics** (`/stats`): per-run history (bytes, files, duration, success
+  rate) over 24h/7d/30d/all, and a disk-usage forecast. Run history is stored
+  in `/config/stats.db`.
+* **Viewer** (`/viewer`): plays downloaded front and rear recordings together,
+  with the GPS track on a map, a G-sensor chart, and auto-advance through
+  contiguous segments.
+
 ##### First-Run Wizard
 
 On the very first visit (or any time `auth.password_hash` is empty), the
@@ -254,16 +273,16 @@ characters to complete setup. The hash (Argon2id) is stored in
 
 ##### Auth Modes
 
-Three authentication modes are available via `settings.json`:
+Three authentication modes are available (Settings page, Auth section, or
+`auth.mode` in `settings.json`):
 
 | Mode | Behavior |
 | --- | --- |
 | `login` | Password authentication (default). Session cookie valid for the configured lifetime. |
 | `none` | No authentication required. Suitable for trusted LAN access where no admin password is desired. |
-| `proxy` | A reverse proxy handles authentication. BlackVue Sync trusts the forwarded identity. |
+| `proxy` | A reverse proxy handles authentication. BlackVue Sync trusts the user named in `auth.proxy_user_header` (default `X-Remote-User`) on requests from `auth.trusted_proxies`. |
 
-To change the mode, edit `auth.mode` in `/config/settings.json`. The change
-takes effect on the next request without a restart.
+A mode change takes effect on the next request without a restart.
 
 ##### Reverse Proxy (Caddy Example)
 
@@ -290,7 +309,7 @@ The first-run wizard will prompt for a new password.
 
 The [ghcr.io/tekgnosis-net/blackvuesync](https://github.com/tekgnosis-net/blackvuesync/pkgs/container/blackvuesync) docker image runs the long-running web service that schedules sync operations internally.
 
-Sync is now scheduler-driven inside the long-running web service. The `CRON` and `RUN_ONCE` environment variables of the cron-era image have been retired. To trigger an on-demand sync, POST to `/api/sync/now`. To change the schedule, edit `settings.schedule.cron_expression` in `settings.json` (default `*/15 * * * *`).
+Sync is now scheduler-driven inside the long-running web service. The `CRON` and `RUN_ONCE` environment variables of the cron-era image have been retired. To trigger an on-demand sync, use **Sync now** on the dashboard (or POST to `/api/sync/now`). To change the schedule, edit **Schedule** on the Settings page, or `schedule.cron_expression` in `settings.json` (default `*/15 * * * *`, evaluated in `schedule.timezone`, default `UTC`).
 
 ##### Quick Start
 
@@ -312,15 +331,21 @@ Once that works, a typical invocation would be similar to:
 
 ```sh
 docker run -d --restart unless-stopped \
+    -p 8080:8080 \
     -v /data/dashcam:/recordings \
+    -v /data/blackvuesync-config:/config \
     -e ADDRESS=dashcam.example.net \
     -e PUID=$(id -u) \
     -e PGID=$(id -g) \
     -e TZ="America/New_York" \
+    -e BLACKVUESYNC_TIMEZONE="America/New_York" \
     -e KEEP=2w \
     --name blackvuesync \
 ghcr.io/tekgnosis-net/blackvuesync
 ```
+
+Then open `http://<host>:8080/` and set the admin password in the first-run
+wizard.
 
 ##### Reverse Proxy
 
@@ -362,6 +387,8 @@ from the environment variables listed below. From that point on, the file is
 canonical: environment variables are ignored on subsequent starts. To change
 a setting after first run, either:
 
+* Use the Settings page in the web UI. Most changes apply immediately or on
+  the next scheduled sync; connection, web and system changes need a restart.
 * Edit `/config/settings.json` directly and restart the container.
 * Delete `/config/settings.json` and restart; the container re-bootstraps from
   the current environment variables.
@@ -379,8 +406,7 @@ docker run -d --restart unless-stopped \
 
 ##### Recovery
 
-If you lose access to the admin password (relevant once the web UI is
-available), edit `auth.password_hash` to `""` in `/config/settings.json` and
+If you lose access to the admin password, edit `auth.password_hash` to `""` in `/config/settings.json` and
 restart the container. The first-run wizard will prompt for a new password.
 
 ##### Reference
@@ -392,10 +418,28 @@ These options are required for the docker image to operate correctly:
 * The `PUID` and `PGID` parameters set to the desired destination directory's user id and group id.
 * The `TZ` parameter set to the same [timezone](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones) as the dashcam. Note that BlackVue dashcams do not respect Daylight Savings Time, so their clock needs to be adjusted periodically.
 
-Other parameters:
+Recommended:
+
+* The `/config` volume, which holds `settings.json`, `stats.db` and `logs/`.
+* Port `8080` published for the web UI.
+
+Web service parameters (first start only, like all parameters below):
+
+* `BLACKVUESYNC_SCHEDULE`: Cron expression for scheduled syncs. (Default: `*/15 * * * *`.)
+* `BLACKVUESYNC_TIMEZONE`: Timezone the schedule is evaluated in. `TZ` is not used for this. (Default: `UTC`.)
+* `BLACKVUESYNC_PORT`: Web UI port inside the container. (Default: `8080`.)
+* `BLACKVUESYNC_ADMIN_USERNAME`: Admin username. The password is set in the first-run wizard. (Default: `admin`.)
+* `STATS_RETENTION_DAYS`: Days of per-run statistics to keep; `0` keeps all. (Default: `365`.)
+
+Read on every start (not stored in `settings.json`):
+
+* `BLACKVUESYNC_TRUST_PROXY`: Set to `1` behind an HTTPS reverse proxy so the session cookie is marked `Secure`.
+* `BLACKVUESYNC_CONFIG_PATH`: Alternate location of `settings.json`. (Default: `/config/settings.json`.)
+
+Sync parameters:
 
 * `GROUPING`: Groups downloaded recordings in directories, `daily`, `weekly`, `monthly`, `yearly` and `none` are supported. (Default: `none`.)
-* `KEEP`: Sets the retention period of downloaded recordings. Recordings prior to the retention period will be removed from the destination. Accepted units are `d` for days and `w` for weeks. If no unit is indicated, days are assumed. (Default: empty, meaning recordings are kept forever.)
+* `KEEP`: Sets the retention period of downloaded recordings. Recordings prior to the retention period will be removed from the destination. Accepted units are `d` for days and `w` for weeks. If no unit is indicated, days are assumed. (Default: `2w` when unset or empty.)
 * `PRIORITY`: Sets the priority to download recordings. Pick `date` to download from oldest to newest; pick `rdate` to download from newset to oldest; pick `type` to download manual, event (all types), normal and (non-event) parking recordings in that order. Defaults to `date`.
 * `MAX_USED_DISK`: If set to a percentage value, stops downloading if the amount of used disk space exceeds the indicated percentage value.  (Default: `90`, i.e. 90%.)
 * `TIMEOUT`: If set to a float value, sets the timeout in seconds for connecting to the dashcam. (Default: `10.0` seconds.)
@@ -404,14 +448,18 @@ Other parameters:
 * `SKIP_METADATA`: If set, skips downloading the indicated metadata file types. Takes a string of characters: `t` for thumbnail (`.thm`), `3` for accelerometer (`.3gf`), `g` for GPS (`.gps`). For example, `t3g` skips all metadata files. (Default: empty.)
 * `INCLUDE`: If set, downloads only recordings matching the given codes. Each code is a recording type letter optionally followed by a camera direction letter, comma-separated. For example, `P,NF` downloads all Parking recordings and Normal Front recordings. (Default: empty, meaning all recordings are downloaded.)
 * `EXCLUDE`: If set, excludes recordings matching the given codes, same format as `INCLUDE`. Takes priority over `INCLUDE`. For example, setting `INCLUDE=N` and `EXCLUDE=NR` downloads all Normal recordings except Normal Rear. (Default: empty.)
-* `QUIET`: If set to any value, quiets down logs: only unexpected errors will be logged. (Default: empty.)
+* `QUIET`: If set to `1`, `true` or `yes`, quiets down logs: only unexpected errors will be logged. (Default: empty.)
 * `LOG_FORMAT`: If set, changes log output format. Supported values are `text` and `json`. (Default: empty, meaning `text`.)
 * `METRICS_FILE`: If set, writes Prometheus text format metrics to this path. (Default: empty.)
 * `METRICS_PUSHGATEWAY_URL`: If set, pushes Prometheus text format metrics to this Pushgateway URL. (Default: empty.)
 * `METRICS_JOB`: Sets the Pushgateway job grouping value. (Default: `blackvuesync`.)
 * `METRICS_INSTANCE`: Sets the Pushgateway instance grouping value. (Default: empty, meaning the dashcam address.)
-* `METRICS_STATE_FILE`: If set, stores cross-run metrics state at this path. (Default: empty, meaning `.blackvuesync.metrics-state.json` under the destination when metrics are enabled.)
-* `DRY_RUN`: If set to any value, makes it so that the script communicates what it would do without actually doing anything. (Default: empty.)
+* `METRICS_STATE_FILE`: If set, stores cross-run metrics state at this path. (Default: `/config/metrics-state.json`.)
+* `AFFINITY_KEY`: Optional affinity key passed to the dashcam. (Default: empty.)
+
+`DRY_RUN` is not read by the web service. Enable dry run with the **Dry run**
+toggle on the Settings page (System section), or run a one-off
+`sync --dry-run` as shown in [Quick Start](#quick-start).
 
 ## License
 

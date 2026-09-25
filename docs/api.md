@@ -20,7 +20,9 @@ Liveness probe. Returns `200 OK` immediately.
 ### `GET /readyz`
 
 Readiness probe. Returns `200 OK` once the settings store has loaded.
-Returns `503 Service Unavailable` while the process is still starting.
+The `503 Service Unavailable` branch exists for a missing settings store; in
+practice the app is only constructed after the store loads, so it always
+returns 200.
 
 ```json
 {"status": "ready", "settings_loaded": true}
@@ -42,16 +44,18 @@ Displays the first-run setup wizard. Redirected to automatically when
 ### `POST /first-run`
 
 Submits the initial password. Requires the `X-CSRFToken` header (or
-`_csrf_token` form field). Password must be at least 12 characters.
+`csrf_token` form field). Password must be at least 12 characters.
 
 | Field | Required | Description |
 | --- | --- | --- |
+| `username` | no | Admin username; defaults to `admin` |
 | `password` | yes | Initial admin password (min 12 chars) |
-| `password_confirm` | yes | Confirmation; must match `password` |
+| `confirm` | yes | Confirmation; must match `password` |
 
-On success: redirects to `/`.
+On success: redirects to `/login`. If a password is already set, both `GET`
+and `POST` redirect to `/login`.
 
-On error: re-renders the form with a validation message.
+On error: re-renders the form with a validation message and status `400`.
 
 ### `GET /login`
 
@@ -66,8 +70,9 @@ Authenticates the user. Requires the `X-CSRFToken` header.
 | --- | --- | --- |
 | `username` | yes | Admin username (from `auth.username`) |
 | `password` | yes | Admin password |
+| `next` | no | Relative path to return to; values with a scheme or host are replaced by `/` |
 
-- On success: sets a session cookie and redirects to `/`.
+- On success: sets a session cookie and redirects to `next`, or to `/`.
 - On failure: re-renders the form with a generic error after a minimum
   delay of 1.5 seconds (uniform-timing defence).
 - After 10 failures from the same IP within 10 minutes: requests are
@@ -86,14 +91,11 @@ All UI endpoints require authentication (subject to `auth.mode`).
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/` | Dashboard (recording stats overview) |
+| `GET` | `/` | Dashboard: sync status, live progress, controls, cards |
 | `GET` | `/settings` | Settings editor |
-| `GET` | `/logs` | Recent sync log viewer |
-| `GET` | `/stats` | Metrics and charts |
+| `GET` | `/logs` | Live log viewer |
+| `GET` | `/stats` | Run statistics and disk forecast |
 | `GET` | `/viewer` | In-browser recording viewer |
-
-> **Note:** these pages are placeholder stubs in Phase C. Full
-> implementations will be added in subsequent phases.
 
 ---
 
@@ -205,9 +207,12 @@ curl -X POST \
 
 ### `GET /api/sync/last`
 
-Returns the most recently completed (or running) sync snapshot.
+Returns the current sync snapshot when it is not idle: a running job, or a
+completed/failed job during its 10-second retention window.
 
-- **204 No Content** -- no sync has ever run in this server session.
+- **204 No Content** -- the publisher is idle: no sync has run, or more than
+  10 seconds have passed since the last one ended. Completed-run history is
+  available from `/api/stats/series`.
 - **200 OK** -- returns the same JSON body as `/api/sync/progress`.
 
 ---
@@ -281,8 +286,9 @@ object containing only the fields to change; missing fields are left
 unchanged. Fields whose value is the redaction sentinel `"***"` are stripped
 before applying, so a client may post back the full GET response without
 overwriting secrets. JSON arrays are coerced to tuples for the
-`sync.include`, `sync.exclude`, and `sync.skip_metadata` fields so the
-in-memory dataclass remains tuple-typed (JSON has no tuple).
+`sync.include`, `sync.exclude`, `sync.skip_metadata`, and
+`auth.trusted_proxies` fields so the in-memory dataclass remains tuple-typed
+(JSON has no tuple).
 
 **Request body example (`PATCH /api/settings/sync`):**
 
@@ -314,7 +320,7 @@ in-memory dataclass remains tuple-typed (JSON has no tuple).
   "code": "SETTINGS_INVALID",
   "details": {
     "field_errors": [
-      {"path": "sync.priority", "message": "must be one of date, rdate, type"}
+      {"path": "sync", "message": "sync.priority must be one of ['date', 'rdate', 'type'], got 'bogus'"}
     ]
   }
 }
@@ -553,8 +559,8 @@ Returns the current in-memory log buffer snapshot as JSON.
 ```
 
 `file_path` is `""` (empty string) when no rotating file handler is active. `verbosity` reflects
-the current `logging.verbose` / `logging.quiet` setting (`"verbose"`, `"normal"`,
-or `"quiet"`).
+the current `logging.verbose` / `logging.quiet` setting: `"quiet"` when quiet,
+otherwise `"normal"` (verbose 0), `"verbose"` (1), or `"debug"` (2 or more).
 
 ### `GET /api/logs/stream`
 
@@ -603,7 +609,8 @@ All endpoints below require authentication (subject to `auth.mode`).
 | `GET` | `/api/stats/series?range=24h\|7d\|30d\|all` | JSON `{range, summary, series, forecast}` |
 
 `summary` = `{runs, bytes, avg_duration_seconds, success_rate}`;
-`series.points[]` = `{ts, bytes, files, duration, disk, success, failures{reason}}`;
+`series.points[]` = `{ts, bytes, files, duration, disk, success, dry_run, failures{reason}}`
+(dry-run rows are excluded from the `bytes` total);
 `forecast` = `{projected[{ts, disk}], limits{max_used_disk_percent, keep_steady_state}}`
 (disk / limit values are 0..1 ratios). Per-run rows are captured in serve mode and
 stored in the SQLite stats DB (`/config/stats.db`); `stats.retention_days` prunes
@@ -620,8 +627,8 @@ file formats. `viewer.journey_mode` / `viewer.speed_unit` settings tune the page
 | --- | --- | --- |
 | GET | `/api/viewer/recordings` | recordings grouped by day, newest first |
 | GET | `/api/viewer/recordings/<base>_<type>/journey` | forward chain of contiguous segments |
-| GET | `/api/viewer/recordings/<base>_<type>/gps` | parsed GPS points `[{t, lat, lon, speed}]` |
-| GET | `/api/viewer/recordings/<base>_<type>/gsensor` | parsed G-sensor `[{t, x, y, z}]` |
+| GET | `/api/viewer/recordings/<base>_<type>/gps` | `{"points": [{t, lat, lon, speed}]}` |
+| GET | `/api/viewer/recordings/<base>_<type>/gsensor` | `{"samples": [{t, x, y, z}]}` |
 | GET | `/media/<path>` | path-safe `.mp4`/`.thm` serving (HTTP Range) |
 
 ---
@@ -630,8 +637,9 @@ file formats. `viewer.journey_mode` / `viewer.speed_unit` settings tune the page
 
 The `/settings` page added in Sub-Project #3 drives the existing
 `GET /api/settings` and `PATCH /api/settings/<section>` endpoints for
-all nine sections (connection, schedule, sync, retention, logging,
-metrics, web, auth, system). It also drives `POST /api/auth/password`
+all eleven sections (connection, schedule, sync, retention, logging,
+metrics, stats, viewer, web, auth, system; `stats` and `viewer` arrived with
+Sub-Projects #5 and #6). It also drives `POST /api/auth/password`
 (change-password dialog) and `DELETE /api/auth/sessions` (rotate
 sessions button). No new API endpoints were added in Sub-Project #3.
 
@@ -675,10 +683,9 @@ Returns 404 when no sync is active:
 
 ## HTMX Fragment Endpoints (additions)
 
-Four new card fragments. Each fragment renders the matching
-`_partials/*.html` template, which includes an `hx-trigger="every 5s"`
-attribute so the card self-polls once a dashboard template (Phase 2B)
-embeds it. No client currently mounts these fragments.
+Dashboard card fragments. Each renders the matching `_partials/*.html`
+template, which includes an `hx-trigger` attribute so the card self-polls
+once the dashboard embeds it.
 
 - `GET /hx/storage-card` -- renders `_partials/storage_card.html` with the
   same data as `/api/health/storage`

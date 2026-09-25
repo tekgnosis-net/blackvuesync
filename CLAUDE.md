@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-BlackVue Sync is a single-file Python utility that synchronizes recordings from BlackVue dashcams to a local directory over HTTP. The project emphasizes simplicity and portability with zero third-party dependencies, packaged both as a standalone script and a Docker container.
+BlackVue Sync synchronizes recordings from BlackVue dashcams to a local directory over HTTP. It has two runtimes: a `sync` CLI whose core (`sync.py`, `metrics.py`) uses only the standard library, and a `serve` web service (Flask) with an internal scheduler, dashboard, settings UI, log viewer, statistics and a recording viewer. Both ship in the Docker image, which defaults to `serve`.
 
 This project is a fork on GitHub: <https://github.com/tekgnosis-net/blackvuesync> (upstream: <https://github.com/acolomba/blackvuesync>)
 
@@ -81,7 +81,10 @@ The application is a Python package under `blackvuesync/`. Core modules:
 - `settings.py` -- `Settings` frozen-dataclass tree, `SettingsStore` with atomic
   JSON persistence, per-section validators, env-var bootstrap, and schema
   migration. See "Settings" section below.
-- `__main__.py` -- CLI entry point; wires together the above at startup.
+- `__main__.py` -- CLI entry point with two subcommands: `sync` (one-shot,
+  cron-era flags) and `serve` (long-running web service with the internal
+  scheduler). When the first argument is not a subcommand or flag (the legacy
+  `blackvuesync <address> ...` form), `sync` is inserted.
 
 ### Settings
 
@@ -91,23 +94,45 @@ the file on first run; subsequent runs read the file and ignore env vars. The
 file has `0600` permissions and `SettingsStore` refuses to load if the mode is
 wider than that.
 
-Settings are organized into nine frozen-dataclass sections:
+Settings are organized into eleven frozen-dataclass sections (schema
+`version` 1):
 
 | Section | TIER | Key fields |
 | --- | --- | --- |
 | connection | restart | address, timeout_seconds |
-| schedule | next_tick | cron_expression, timezone |
-| sync | next_tick | priority, grouping, include, exclude, retry_failed_after, skip_metadata |
+| schedule | next_tick | cron_expression, timezone, paused |
+| sync | next_tick | priority, grouping, include, exclude, retry_failed_after, skip_metadata, affinity_key |
 | retention | next_tick | keep, max_used_disk_percent |
-| logging | immediate | verbose, quiet, format |
-| metrics | immediate | file, pushgateway_url, state_file |
+| logging | immediate | verbose, quiet, format, file_max_bytes, file_backup_count, ring_buffer_capacity |
+| metrics | immediate | file, pushgateway_url, job, instance, state_file |
+| stats | next_tick | retention_days |
+| viewer | immediate | journey_mode, speed_unit |
 | web | restart | port, session_lifetime_hours |
-| auth | immediate | mode, username, password_hash, session_secret, trusted_proxies |
+| auth | immediate | mode, username, password_hash, session_secret, trusted_proxies, proxy_user_header |
 | system | restart | destination, dry_run |
 
 `TIER` (`immediate` / `next_tick` / `restart`) indicates how quickly a change
-propagates once the web UI exists. All mutations go through `SettingsStore.update()`
-which validates, saves atomically, and fires change-listener callbacks.
+propagates. All mutations go through `SettingsStore.update()`, which validates,
+saves atomically, and fires change-listener callbacks. The settings UI
+(`server/settings_form.py`) declares which fields each section exposes; the
+auth secrets are deliberately not form fields.
+
+Env vars read on first-run bootstrap: `ADDRESS`, `TIMEOUT`,
+`BLACKVUESYNC_SCHEDULE`, `BLACKVUESYNC_TIMEZONE`, `PRIORITY`, `GROUPING`,
+`INCLUDE`, `EXCLUDE`, `RETRY_FAILED_AFTER`, `SKIP_METADATA`, `AFFINITY_KEY`,
+`KEEP`, `MAX_USED_DISK`, `VERBOSE`, `QUIET`, `LOG_FORMAT`, `METRICS_*`,
+`STATS_RETENTION_DAYS`, `BLACKVUESYNC_PORT`, `BLACKVUESYNC_ADMIN_USERNAME`.
+`CRON` and `RUN_ONCE` are retired and only produce a warning. `DRY_RUN` and
+`TZ` are not seeded into the file; `system.dry_run` and `schedule.timezone`
+must be set through the file or the settings UI.
+
+Other process-level env vars (read on every start, not persisted):
+`BLACKVUESYNC_CONFIG_PATH` and `BLACKVUESYNC_TRUST_PROXY` (marks the session
+cookie `Secure`).
+
+Serve mode also keeps these files next to `settings.json`: `stats.db` (SQLite
+per-run metrics, see `server/stats_store.py`) and `logs/blackvuesync.log`
+(rotating, sized by `logging.file_max_bytes` / `file_backup_count`).
 
 ### Core Flow
 
@@ -145,11 +170,13 @@ Grouping speeds up loading in BlackVue Viewer and keeps directories manageable.
 The web server lives under `blackvuesync/server/`. It is a standard Flask
 application, structured as follows:
 
-- `__init__.py` -- `create_app(settings_store, testing=False)` factory.
-  Configures Flask-WTF CSRF protection, ProxyFix middleware, session cookie
-  settings, and attaches `settings_store` to the app instance. Registers the
-  three blueprints and adds the `add_security_headers` after-request hook that
-  injects CSP, X-Frame-Options, HSTS, and related headers on every response.
+- `__init__.py` -- `create_app(settings_store, ...)` factory. Configures
+  Flask-WTF CSRF protection, ProxyFix middleware, session cookie settings, and
+  attaches `settings_store`, `progress_publisher`, `stats_store` (in-memory
+  SQLite when none is passed) and related collaborators to the app instance.
+  Registers the sixteen blueprints listed below and adds the
+  `add_security_headers` after-request hook that injects CSP, X-Frame-Options,
+  HSTS, and related headers on every response.
 - `auth.py` -- Argon2id password hashing helpers (`hash_password`,
   `verify_password`, `needs_rehash`) and the `login_required` decorator.
   Maintains an in-memory sliding-window rate limiter (10 failures per 600 s →
@@ -157,21 +184,57 @@ application, structured as follows:
   `current_app.settings_store` on every request, so a mode change takes effect
   immediately without a restart.
 - `routes/health.py` -- `GET /healthz` (always 200) and `GET /readyz` (200 when
-  settings store is loaded, 503 while starting).
+  settings store is loaded; the app is built after the store loads, so the
+  503 branch is unreachable in practice).
 - `routes/auth.py` -- `GET|POST /login`, `POST /logout`, `GET|POST /first-run`.
   A `before_app_request` hook redirects every non-exempt path to `/first-run`
   while `auth.password_hash == ""` (sticky first-run flow).
-- `routes/ui.py` -- Placeholder `GET` routes for `/`, `/settings`, `/logs`,
-  `/stats`, `/viewer`; all protected by `@login_required`.
+- `routes/ui.py` -- page routes `/` (dashboard), `/settings`, `/logs`,
+  `/stats`, `/viewer`; all protected by `@login_required`. The dashboard
+  pre-renders its cards server-side so the first paint is populated.
 - `routes/api_sync.py` -- JSON API routes at `/api/sync/*`; see "Sync API"
   subsection below.
+- `routes/api_settings.py` -- `GET /api/settings`, `PATCH /api/settings/<section>`.
+- `routes/api_auth.py` -- `GET /api/auth/me`, `POST /api/auth/password`,
+  `DELETE /api/auth/sessions` (rotates `session_secret`).
+- `routes/api_health.py` -- `/api/health/storage` and `/api/health/dashcam`.
+- `routes/api_dashcam.py` -- `/api/dashcam/info`; read-only parse of the
+  dashcam's `version.bin` and `config.ini`.
+- `routes/api_recordings.py` -- `/api/recordings/recent`.
+- `routes/api_schedule.py` -- `POST /api/schedule/pause|resume`.
+- `routes/api_logs.py` -- `/api/logs/recent` snapshot and `/api/logs/stream` SSE.
+- `routes/api_stats.py` -- `/api/stats/series` (summary, series, disk forecast).
+- `routes/api_viewer.py` -- `/api/viewer/recordings` and per-recording
+  `journey`, `gps`, `gsensor`.
+- `routes/media.py` -- `/media/<path>` serves `.mp4`/`.thm` from the destination
+  with HTTP Range; guarded by an extension allow-list, `safe_join`, and a
+  realpath-containment check.
 - `routes/hx_sync.py` -- HTMX fragment routes at `/hx/sync/*`; renders
   `_partials/sync_status_card.html` and `_partials/last_run_card.html`.
+- `routes/hx_dashboard.py` -- HTMX dashboard cards at `/hx/*-card`.
 - `progress.py` -- `FileProgress` / `SyncProgress` frozen dataclasses and
   `ProgressPublisher`; see "Progress Publisher" subsection below.
-- `sync_runner.py` -- thin wrapper that spawns `sync.sync()` on a daemon
-  thread guarded by a module-level `threading.Lock`; surfaces a 409 when a
-  sync is already running.
+- `sync_runner.py` -- spawns `run_sync` on a daemon thread guarded by a
+  module-level `threading.Lock`; surfaces a 409 when a sync is already running.
+  The cooperative stop flag behind `POST /api/sync/stop` lives in `sync.py`
+  (checked between download chunks) and is cleared at the start of each run.
+- `scheduler.py` -- APScheduler `BackgroundScheduler` that fires the sync from
+  `schedule.cron_expression` in `schedule.timezone`; honors `schedule.paused`.
+- `log_buffer.py` -- ring-buffer logging handler behind the `/logs` page; unlike
+  the progress publisher it delivers every line (batches, not latest-wins).
+- `stats_store.py` -- SQLite store of one row per sync run, pruned by
+  `stats.retention_days`.
+- `forecast.py` -- least-squares disk-usage projection for the stats page.
+- `viewer_index.py` -- enumerates downloaded recordings and computes journey
+  chains of contiguous segments.
+- `gps.py` / `gsensor.py` -- stdlib parsers for `.gps` (NMEA) and `.3gf`
+  (big-endian binary) sidecars; formats in `docs/reference/blackvue-file-formats.md`.
+- `settings_form.py` -- field descriptors that drive the settings page.
+- `sse.py` -- shared Server-Sent Events response helper.
+
+Front end: Jinja templates under `server/templates/`, with Alpine.js, htmx,
+Chart.js and Leaflet vendored under `server/static/js/` (see `VENDORED.md`).
+No build step; page scripts are plain files in `static/js/`.
 
 **Auth modes** (set via `settings.json` `auth.mode`):
 
@@ -195,7 +258,7 @@ attached to the Flask app as `app.progress_publisher`.
 
 | Method | Description |
 | --- | --- |
-| `begin_job(files_total) -> str` | starts a job; returns `job_id` (uuid4 hex) |
+| `begin_job(files_total, job_id=None) -> str` | starts a job; returns `job_id` (uuid4 hex when not supplied) |
 | `start_file(filename, artifact, total_bytes)` | marks start of a file download |
 | `update_bytes(downloaded, total_bytes=0)` | progress tick; throttled to 5 Hz for subscribers |
 | `finish_file(success, reason=None)` | closes a file; bumps aggregate counts |
@@ -210,8 +273,9 @@ attached to the Flask app as `app.progress_publisher`.
 
 State transitions: `idle → running → complete/failed → idle`.
 `SyncProgress` and `FileProgress` are frozen dataclasses; mutations use
-`dataclasses.replace`. The `_NoopPublisher` sentinel is used in the CLI sync
-path so `sync.py` stays free of Flask imports.
+`dataclasses.replace`. The CLI sync path passes `publisher=None`, and
+`sync.py` imports `server.progress` only under `TYPE_CHECKING`, so it stays
+free of Flask imports. `_NoopPublisher` is a no-op stand-in used by tests.
 
 ### Sync API
 
@@ -224,7 +288,8 @@ Sync-related endpoints are split between JSON API and HTMX fragments:
 | `GET` | `/api/sync/progress` | current snapshot as JSON |
 | `GET` | `/api/sync/progress/stream` | SSE stream of progress events |
 | `POST` | `/api/sync/now` | trigger an on-demand sync |
-| `GET` | `/api/sync/last` | last completed snapshot; 204 if never run |
+| `POST` | `/api/sync/stop` | request cooperative stop; 202, or 404 when idle |
+| `GET` | `/api/sync/last` | current non-idle snapshot; 204 when idle, including 10 s after a run ends |
 
 `POST /api/sync/now` is CSRF-protected globally by Flask-WTF. It returns
 202 + `{"job_id": ...}` or 409 + `{"code": "SYNC_ALREADY_RUNNING", ...}`.
@@ -240,6 +305,9 @@ to prevent nginx-family proxy buffering.
 | --- | --- | --- |
 | `GET` | `/hx/sync/status-card` | `_partials/sync_status_card.html` |
 | `GET` | `/hx/sync/last-run-card` | `_partials/last_run_card.html` |
+
+The full endpoint reference, including settings, auth, health, logs, stats and
+viewer APIs, is in `docs/api.md`. Update it alongside any route change.
 
 ### Logging
 
@@ -266,13 +334,34 @@ Two logger hierarchies:
 - `test/test_sync_runner.py` -- tests for `trigger_sync` locking and daemon thread
 - `test/test_routes_api_sync.py` -- tests for `/api/sync/*` endpoints and SSE
 - `test/test_routes_hx_sync.py` -- tests for `/hx/sync/*` htmx fragment endpoints
+- `test/test_routes_*.py` -- one file per blueprint (`api_auth`, `api_dashcam`,
+  `api_health`, `api_logs`, `api_recordings`, `api_schedule`, `api_settings`,
+  `api_stats`, `api_viewer`, `hx_dashboard`, `media`)
+- `test/test_sync_resume.py`, `test/test_sync_stop_flag.py`,
+  `test/test_clean_destination.py` -- download resume, cooperative stop, temp
+  cleanup
+- `test/test_scheduler.py`, `test/test_scheduler_pause.py` -- APScheduler wiring
+- `test/test_log_buffer.py`, `test/test_logging_on_change.py`,
+  `test/test_main_serve_logging.py` -- live logging
+- `test/test_stats_store.py`, `test/test_forecast.py` -- stats persistence and
+  disk forecast
+- `test/test_gps.py`, `test/test_gsensor.py`, `test/test_viewer_index.py` --
+  viewer parsers and index
+- `test/test_settings_form.py`, `test/test_settings_page.py`,
+  `test/test_dashboard_render.py`, `test/test_dashboard_sse_handoff.py` --
+  page rendering
+- `test/e2e/` -- Playwright browser tests for the dashboard, settings, logs,
+  stats and viewer pages
 - `features/` -- Behave BDD integration tests against a mock BlackVue dashcam
 
 ### Running Tests
 
 ```bash
-# all unit tests
+# all unit tests (sync core only)
 pytest test/blackvuesync_test.py -v
+
+# full pytest suite, excluding browser tests
+pytest test --ignore=test/e2e
 
 # single unit test (by node id or keyword expression)
 pytest test/blackvuesync_test.py::test_name -v
@@ -308,7 +397,7 @@ constraint must be maintained for portability (the cron-based sync path must
 work without pip-installed packages).
 
 The web server (`blackvuesync/server/`) depends on Flask, Flask-WTF, waitress,
-and argon2-cffi. These are listed as runtime dependencies in `pyproject.toml`
+argon2-cffi, and APScheduler. These are listed as runtime dependencies in `pyproject.toml`
 and installed via `pip install -e ".[dev]"` in the development setup.
 
 ### Backwards Compatibility
@@ -329,8 +418,9 @@ The Docker image (`Dockerfile`):
   comes from `settings.schedule.cron_expression` (default `*/15 * * * *`)
 - `entrypoint.sh` remaps the dashcam user via `setuid.sh`, then execs
   `python -m blackvuesync` with the CMD passed by Docker; defaults to `serve`
-- Runtime pip deps (Flask, Flask-WTF, waitress, argon2-cffi, APScheduler) are
-  installed in the image via `uv` (binary copied from `ghcr.io/astral-sh/uv`)
+- Multi-stage build: runtime pip deps (Flask, Flask-WTF, waitress,
+  argon2-cffi, APScheduler) are installed into `/opt/venv` in a builder stage via
+  `uv`; the final stage copies only the venv, so `uv` is not in the image
 - `EXPOSE 8080` documents the web server port; map it in `docker-compose.yml`
 - `HEALTHCHECK` polls `GET /healthz` via Python `urllib.request` (no curl needed)
 - `/config` volume: mount a host directory here; `settings.json` is stored inside

@@ -1,5 +1,42 @@
 # CHANGELOG
 
+Versions 2.3.0 onward are from the tekgnosis-net fork. Pre-release versions
+(`aN`/`bN`) track the sub-project that introduced them.
+
+## 2.8.0a0
+
+* Add recording viewer (`/viewer`): front/rear playback, GPS track on a map, G-sensor chart, and journey auto-advance. New `viewer` settings section (`journey_mode`, `speed_unit`). (#21)
+
+## 2.7.0a0
+
+* Add statistics page (`/stats`): per-run history in `/config/stats.db` and a disk-usage forecast. New `stats` settings section (`retention_days`). (#20)
+
+## 2.6.0a0
+
+* Add live log viewer (`/logs`) backed by an in-memory ring buffer and a rotating log file under `/config/logs/`. (#19)
+
+## 2.5.0a0
+
+* Add settings UI (`/settings`) covering all settings sections, password change, and session rotation. (#18)
+
+## 2.4.0b0
+
+* Add dashboard with live progress, Sync now, Stop, Pause/Resume, and storage, dashcam, next-run and recent-activity cards. (#11, #12, #17)
+* Add read-only dashcam config info card. (#12)
+* Resume interrupted downloads with HTTP range requests. (#13)
+* Multi-stage Docker image; `uv` is no longer in the final image. (#14)
+* Apply logging setting changes without a restart. (#15)
+
+## 2.3.0
+
+* Restructure as a package with `sync` and `serve` subcommands; `blackvuesync <address>` still runs a sync. (#4)
+* Add `SettingsStore`: `/config/settings.json` (mode `0600`), seeded from env vars on first start, canonical afterwards. (#5)
+* Add authentication: Argon2id passwords, first-run wizard, login rate limiting, and `login` / `none` / `proxy` modes. (#6)
+* Add sync API with live progress over SSE. (#7)
+* Add `serve`: Flask + waitress web service with an APScheduler-driven sync schedule. The `CRON` and `RUN_ONCE` env vars are retired; the image defaults to `serve` on port 8080. (#8)
+* Add settings and auth APIs. (#9)
+* Add structured JSON logs and Prometheus metrics export (upstream #73, #74).
+
 ## 2.2.0
 
 * Replace undocumented `--filter` with `--include` and `--exclude` options for filtering recordings by type and direction. Codes are comma-separated, direction is optional. (#61)
