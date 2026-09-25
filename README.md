@@ -16,9 +16,19 @@ BlackVue dashcams expose an HTTP server that can be used to download all recordi
 
 A typical setup would be a periodic cron job or a Docker container running on a local server.
 
-The HTTP API surface is documented in [docs/api.md](docs/api.md). The
-long-running web service started shipping in 2.3.0; older releases run the
-cron-era CLI.
+The long-running web service started shipping in 2.3.0; older releases run
+the cron-era CLI.
+
+## Documentation
+
+* [Installation](docs/guide/installation.md): Docker, Compose and pip setup,
+  first run, reverse proxies.
+* [Configuration](docs/guide/configuration.md): every setting and
+  environment variable.
+* [Upgrading](docs/guide/upgrading.md): updates, rollback, and migrating from
+  the cron-era image.
+* [Troubleshooting](docs/guide/troubleshooting.md): common errors and fixes.
+* [HTTP API](docs/api.md): endpoints used by the web UI.
 
 ## Features
 
@@ -269,7 +279,10 @@ Pages:
 On the very first visit (or any time `auth.password_hash` is empty), the
 browser is redirected to `/first-run`. Enter a password of at least 12
 characters to complete setup. The hash (Argon2id) is stored in
-`/config/settings.json` and the redirect disappears.
+`/config/settings.json` and the redirect disappears. Setting
+`BLACKVUESYNC_ADMIN_PASSWORD` (12+ characters) before the first start sets the
+password up front and skips this page. Until a password is set, anyone who
+can reach the port can claim the admin account.
 
 ##### Auth Modes
 
@@ -280,7 +293,7 @@ Three authentication modes are available (Settings page, Auth section, or
 | --- | --- |
 | `login` | Password authentication (default). Session cookie valid for the configured lifetime. |
 | `none` | No authentication required. Suitable for trusted LAN access where no admin password is desired. |
-| `proxy` | A reverse proxy handles authentication. BlackVue Sync trusts the user named in `auth.proxy_user_header` (default `X-Remote-User`) on requests from `auth.trusted_proxies`. |
+| `proxy` | A reverse proxy handles authentication. BlackVue Sync trusts the user named in `auth.proxy_user_header` (default `X-Remote-User`) on requests whose TCP peer address is in `auth.trusted_proxies` (IPs or CIDRs). |
 
 A mode change takes effect on the next request without a restart.
 
@@ -293,9 +306,13 @@ blackvuesync.example.net {
 ```
 
 Set `BLACKVUESYNC_TRUST_PROXY=1` in the container environment (or process
-environment) when deploying behind an HTTPS reverse proxy. This enables
-`SESSION_COOKIE_SECURE` so the session cookie is only transmitted over HTTPS
-connections. Leave it unset for local HTTP development.
+environment) when deploying behind an HTTPS reverse proxy. This marks the
+session cookie `Secure` (HTTPS only) and makes the service honor the proxy's
+`X-Forwarded-For` / `X-Forwarded-Proto` headers. Leave it unset when clients
+connect to port 8080 directly, since they could then spoof those headers.
+
+See [docs/guide/installation.md](docs/guide/installation.md#putting-it-behind-a-reverse-proxy)
+for nginx and proxy-auth examples.
 
 ##### Recovery
 
@@ -428,18 +445,19 @@ Web service parameters (first start only, like all parameters below):
 * `BLACKVUESYNC_SCHEDULE`: Cron expression for scheduled syncs. (Default: `*/15 * * * *`.)
 * `BLACKVUESYNC_TIMEZONE`: Timezone the schedule is evaluated in. `TZ` is not used for this. (Default: `UTC`.)
 * `BLACKVUESYNC_PORT`: Web UI port inside the container. (Default: `8080`.)
-* `BLACKVUESYNC_ADMIN_USERNAME`: Admin username. The password is set in the first-run wizard. (Default: `admin`.)
+* `BLACKVUESYNC_ADMIN_USERNAME`: Admin username. (Default: `admin`.)
+* `BLACKVUESYNC_ADMIN_PASSWORD`: Admin password, at least 12 characters. Hashed into `settings.json` on first start so the first-run page is skipped; remove it from the environment afterwards. (Default: empty, meaning the first-run page asks for one.)
 * `STATS_RETENTION_DAYS`: Days of per-run statistics to keep; `0` keeps all. (Default: `365`.)
 
 Read on every start (not stored in `settings.json`):
 
-* `BLACKVUESYNC_TRUST_PROXY`: Set to `1` behind an HTTPS reverse proxy so the session cookie is marked `Secure`.
+* `BLACKVUESYNC_TRUST_PROXY`: Set to `1` behind an HTTPS reverse proxy: marks the session cookie `Secure` and honors `X-Forwarded-*` headers from one proxy hop.
 * `BLACKVUESYNC_CONFIG_PATH`: Alternate location of `settings.json`. (Default: `/config/settings.json`.)
 
 Sync parameters:
 
 * `GROUPING`: Groups downloaded recordings in directories, `daily`, `weekly`, `monthly`, `yearly` and `none` are supported. (Default: `none`.)
-* `KEEP`: Sets the retention period of downloaded recordings. Recordings prior to the retention period will be removed from the destination. Accepted units are `d` for days and `w` for weeks. If no unit is indicated, days are assumed. (Default: `2w` when unset or empty.)
+* `KEEP`: Sets the retention period of downloaded recordings. Recordings prior to the retention period will be removed from the destination. Accepted units are `d` for days and `w` for weeks. If no unit is indicated, days are assumed. (Default: `2w` when unset or empty. To keep recordings forever, clear **Retention → Keep recordings for** in the web UI.)
 * `PRIORITY`: Sets the priority to download recordings. Pick `date` to download from oldest to newest; pick `rdate` to download from newset to oldest; pick `type` to download manual, event (all types), normal and (non-event) parking recordings in that order. Defaults to `date`.
 * `MAX_USED_DISK`: If set to a percentage value, stops downloading if the amount of used disk space exceeds the indicated percentage value.  (Default: `90`, i.e. 90%.)
 * `TIMEOUT`: If set to a float value, sets the timeout in seconds for connecting to the dashcam. (Default: `10.0` seconds.)
@@ -455,7 +473,7 @@ Sync parameters:
 * `METRICS_JOB`: Sets the Pushgateway job grouping value. (Default: `blackvuesync`.)
 * `METRICS_INSTANCE`: Sets the Pushgateway instance grouping value. (Default: empty, meaning the dashcam address.)
 * `METRICS_STATE_FILE`: If set, stores cross-run metrics state at this path. (Default: `/config/metrics-state.json`.)
-* `AFFINITY_KEY`: Optional affinity key passed to the dashcam. (Default: empty.)
+* `AFFINITY_KEY`: Test harness only; leave unset. (Default: empty.)
 
 `DRY_RUN` is not read by the web service. Enable dry run with the **Dry run**
 toggle on the Settings page (System section), or run a one-off

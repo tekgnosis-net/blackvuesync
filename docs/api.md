@@ -3,6 +3,28 @@
 This document describes the HTTP endpoints exposed by `blackvuesync serve`
 (and the Docker container on port 8080).
 
+## Conventions
+
+- **Authentication.** Endpoints marked as requiring authentication follow
+  `auth.mode`. When a request is not authenticated:
+  - `/api/*` returns `401` with
+    `{"error": "authentication required", "code": "AUTH_REQUIRED", "details": {}}`;
+  - htmx requests (`HX-Request: true`) return `401` with an
+    `HX-Redirect: /login?next=...` header;
+  - pages redirect (`302`) to `/login?next=...`.
+- **Sessions** are signed cookies. They end when the password changes (other
+  than the session that made the change), when sessions are rotated, or after
+  `web.session_lifetime_hours`.
+- **CSRF.** `POST`, `PATCH` and `DELETE` need the `X-CSRFToken` header (or a
+  `csrf_token` form field). The token comes from the page's
+  `<meta name="csrf-token">` and does not expire.
+- **Errors** use `{"error": "...", "code": "...", "details": {...}}`.
+- **Server-Sent Events.** At most 16 streams (`/api/sync/progress/stream` and
+  `/api/logs/stream` combined) are open at once. Beyond that the server
+  returns `503` with code `TOO_MANY_STREAMS` and `Retry-After: 5`.
+- **Proxies.** `X-Forwarded-*` headers are honored (one hop) only when
+  `BLACKVUESYNC_TRUST_PROXY` is set.
+
 ---
 
 ## Health Endpoints
@@ -294,7 +316,12 @@ Updates a single settings section partially. The request body is a JSON
 object containing only the fields to change; missing fields are left
 unchanged. Fields whose value is the redaction sentinel `"***"` are stripped
 before applying, so a client may post back the full GET response without
-overwriting secrets. JSON arrays are coerced to tuples for the
+overwriting secrets. Any other value for `auth.password_hash` or
+`auth.session_secret` is rejected with `422`; use `POST /api/auth/password`
+and `DELETE /api/auth/sessions`. Each field is type-checked against the
+settings schema (for example `web.port` must be an integer, `schedule.paused`
+a boolean, list fields arrays of strings); a wrong type is a `422`, never a
+`500`. JSON arrays are coerced to tuples for the
 `sync.include`, `sync.exclude`, `sync.skip_metadata`, and
 `auth.trusted_proxies` fields so the in-memory dataclass remains tuple-typed
 (JSON has no tuple).
@@ -359,7 +386,9 @@ read fresh from the settings store on every request, so a mode change in
 Changes the current user's password. Requires the current password as well
 as the new password (minimum 12 characters). Failures consume the same
 rate-limit bucket as `POST /login` (10 failures from the same IP within
-600 seconds triggers a 15-minute lockout).
+600 seconds triggers a 15-minute lockout). Both fields must be strings
+(`422 VALIDATION_ERROR` otherwise). On success every other session is signed
+out; the caller's session is re-issued and stays valid.
 
 **Request body:**
 
@@ -549,6 +578,7 @@ Returns the current in-memory log buffer snapshot as JSON.
 
 ```json
 {
+  "boot_id": "3f2a...",
   "lines": [
     {
       "seq": 1,
@@ -564,6 +594,9 @@ Returns the current in-memory log buffer snapshot as JSON.
   "verbosity": "normal"
 }
 ```
+
+`boot_id` identifies the server process. `seq` restarts at 1 in each process,
+so a client that sees a new `boot_id` (or a lower `seq`) resets its position.
 
 `file_path` is `""` (empty string) when no rotating file handler is active. `verbosity` reflects
 the current `logging.verbose` / `logging.quiet` setting: `"quiet"` when quiet,
@@ -585,7 +618,7 @@ X-Accel-Buffering: no
 
 ```text
 event: logs
-data: {"lines": [...]}
+data: {"boot_id": "3f2a...", "lines": [...]}
 
 ```
 

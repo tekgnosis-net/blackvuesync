@@ -121,14 +121,31 @@ Env vars read on first-run bootstrap: `ADDRESS`, `TIMEOUT`,
 `BLACKVUESYNC_SCHEDULE`, `BLACKVUESYNC_TIMEZONE`, `PRIORITY`, `GROUPING`,
 `INCLUDE`, `EXCLUDE`, `RETRY_FAILED_AFTER`, `SKIP_METADATA`, `AFFINITY_KEY`,
 `KEEP`, `MAX_USED_DISK`, `VERBOSE`, `QUIET`, `LOG_FORMAT`, `METRICS_*`,
-`STATS_RETENTION_DAYS`, `BLACKVUESYNC_PORT`, `BLACKVUESYNC_ADMIN_USERNAME`.
-`CRON` and `RUN_ONCE` are retired and only produce a warning. `DRY_RUN` and
+`STATS_RETENTION_DAYS`, `BLACKVUESYNC_PORT`, `BLACKVUESYNC_ADMIN_USERNAME`,
+`BLACKVUESYNC_ADMIN_PASSWORD` (hashed into `auth.password_hash` when at least
+12 characters; never logged). `CRON` and `RUN_ONCE` are retired and only produce a warning. `DRY_RUN` and
 `TZ` are not seeded into the file; `system.dry_run` and `schedule.timezone`
 must be set through the file or the settings UI.
 
 Other process-level env vars (read on every start, not persisted):
-`BLACKVUESYNC_CONFIG_PATH` and `BLACKVUESYNC_TRUST_PROXY` (marks the session
-cookie `Secure`).
+`BLACKVUESYNC_CONFIG_PATH` and `BLACKVUESYNC_TRUST_PROXY`. The latter marks
+the session cookie `Secure` and is the only switch that enables `ProxyFix`
+(one hop of `X-Forwarded-*`); without it `request.remote_addr` is the socket
+peer.
+
+Validation notes: every field is type-checked against its annotation before
+value checks (wrong types are a 422 from the API, and fall back to the default
+with a warning when loading a hand-edited file). `store.update()` re-validates
+only the sections that changed. Cron expressions are range-checked by a stdlib
+parser and follow standard cron semantics (day-of-week 0/7 = Sunday; when both
+day-of-month and day-of-week are restricted either may match);
+`server/scheduler.py` translates them for APScheduler via
+`settings.cron_trigger_fields()`. `retention.keep`, `sync.retry_failed_after`
+and include/exclude reuse the parsers in `sync.py`; an empty `keep` means keep
+forever. An empty `connection.address` is valid; a sync run then fails with a
+clear message. The store generates `auth.session_secret` when the file lacks
+one and refuses to save an empty secret; `password_hash` / `session_secret`
+cannot be set through `PATCH /api/settings/auth`.
 
 Serve mode also keeps these files next to `settings.json`: `stats.db` (SQLite
 per-run metrics, see `server/stats_store.py`) and `logs/blackvuesync.log`
@@ -171,18 +188,28 @@ The web server lives under `blackvuesync/server/`. It is a standard Flask
 application, structured as follows:
 
 - `__init__.py` -- `create_app(settings_store, ...)` factory. Configures
-  Flask-WTF CSRF protection, ProxyFix middleware, session cookie settings, and
+  Flask-WTF CSRF protection (tokens do not expire), ProxyFix middleware (only
+  with `BLACKVUESYNC_TRUST_PROXY`), session cookie settings, and
   attaches `settings_store`, `progress_publisher`, `stats_store` (in-memory
   SQLite when none is passed) and related collaborators to the app instance.
   Registers the sixteen blueprints listed below and adds the
   `add_security_headers` after-request hook that injects CSP, X-Frame-Options,
-  HSTS, and related headers on every response.
+  HSTS, and related headers on every response. CSP `script-src` is `'self'`
+  only; templates must not use inline scripts or event handlers (the vendored
+  Alpine is the CSP build). A settings listener updates `app.secret_key` when
+  `auth.session_secret` rotates, so rotation signs everyone out immediately.
 - `auth.py` -- Argon2id password hashing helpers (`hash_password`,
   `verify_password`, `needs_rehash`) and the `login_required` decorator.
   Maintains an in-memory sliding-window rate limiter (10 failures per 600 s →
-  15-minute lockout) guarded by a `threading.Lock`. Auth mode is read fresh from
+  15-minute lockout) guarded by a `threading.Lock`, with stale entries pruned
+  and the table size capped. Auth mode is read fresh from
   `current_app.settings_store` on every request, so a mode change takes effect
-  immediately without a restart.
+  immediately without a restart. In `login` mode the session carries `pwv`
+  (a short hash of the password hash); a password change invalidates older
+  sessions. Unauthenticated `/api/*` requests get 401 JSON
+  (`AUTH_REQUIRED`), htmx requests get 401 with `HX-Redirect`, pages get a 302
+  to `/login`. `proxy` mode checks the socket peer (not `X-Forwarded-For`)
+  against `auth.trusted_proxies` (IPs or CIDRs).
 - `routes/health.py` -- `GET /healthz` (always 200) and `GET /readyz` (200 when
   settings store is loaded; the app is built after the store loads, so the
   503 branch is unreachable in practice).
@@ -260,9 +287,15 @@ attached to the Flask app as `app.progress_publisher`.
 | --- | --- |
 | `begin_job(files_total, job_id=None) -> str` | starts a job; returns `job_id` (uuid4 hex when not supplied) |
 | `start_file(filename, artifact, total_bytes)` | marks start of a file download |
+| `set_total(files_total)` | sets the file total once the dashcam listing is known |
 | `update_bytes(downloaded, total_bytes=0)` | progress tick; throttled to 5 Hz for subscribers |
 | `finish_file(success, reason=None)` | closes a file; bumps aggregate counts |
-| `end_job(success)` | closes the job; retained for 10 s, then resets to idle |
+| `skip_file()` | counts a file that needed no transfer (`files_skipped`) and removes it from `files_total` |
+| `end_job(success)` | closes the job; retained for 10 s, then resets to idle (a stale reset timer never idles a newer job) |
+
+`sync()` begins the job before listing the dashcam, so early failures
+(dashcam unreachable, lock held) show up as `failed`. Totals count files, not
+recordings.
 
 **Reader API** (called from Flask handlers):
 
@@ -297,7 +330,10 @@ Sync-related endpoints are split between JSON API and HTMX fragments:
 The SSE stream emits `event: progress\ndata: <json>\n\n` frames, throttled
 to 5 Hz. When no state change occurs for 30 seconds the generator emits
 `": keepalive"` instead of a redundant data frame. Set `X-Accel-Buffering: no`
-to prevent nginx-family proxy buffering.
+to prevent nginx-family proxy buffering. `server/sse.py` must not set
+hop-by-hop headers such as `Transfer-Encoding`: waitress rejects them (500).
+At most 16 SSE streams are open at once across endpoints (503
+`TOO_MANY_STREAMS` beyond); waitress runs 32 threads.
 
 **HTMX Fragments** (`/hx/sync/*`, all `@login_required`):
 
@@ -343,6 +379,11 @@ Two logger hierarchies:
 - `test/test_scheduler.py`, `test/test_scheduler_pause.py` -- APScheduler wiring
 - `test/test_log_buffer.py`, `test/test_logging_on_change.py`,
   `test/test_main_serve_logging.py` -- live logging
+- `test/test_sync_fixes.py` -- truncated downloads, lock fd, progress counts,
+  serve-mode settings
+- `test/test_sse.py`, `test/test_server_hardening.py` -- SSE under waitress,
+  stream cap, proxy trust, session revocation, CSRF, 401 handling
+- `test/test_main_entry.py` -- CLI entry does not create stray settings files
 - `test/test_stats_store.py`, `test/test_forecast.py` -- stats persistence and
   disk forecast
 - `test/test_gps.py`, `test/test_gsensor.py`, `test/test_viewer_index.py` --
@@ -351,7 +392,8 @@ Two logger hierarchies:
   `test/test_dashboard_render.py`, `test/test_dashboard_sse_handoff.py` --
   page rendering
 - `test/e2e/` -- Playwright browser tests for the dashboard, settings, logs,
-  stats and viewer pages
+  stats and viewer pages, plus frontend error handling. Deselected by default
+  (`addopts = -m 'not e2e'`); run with `pytest test/e2e -m e2e`
 - `features/` -- Behave BDD integration tests against a mock BlackVue dashcam
 
 ### Running Tests
@@ -362,6 +404,9 @@ pytest test/blackvuesync_test.py -v
 
 # full pytest suite, excluding browser tests
 pytest test --ignore=test/e2e
+
+# playwright browser tests (deselected by default)
+pytest test/e2e -m e2e
 
 # single unit test (by node id or keyword expression)
 pytest test/blackvuesync_test.py::test_name -v

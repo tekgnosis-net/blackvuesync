@@ -3,6 +3,23 @@
 Versions 2.3.0 onward are from the tekgnosis-net fork. Pre-release versions
 (`aN`/`bN`) track the sub-project that introduced them.
 
+## Unreleased
+
+Fixes from a full code review. See [docs/guide/upgrading.md](docs/guide/upgrading.md#upgrading-to-the-release-after-280a0) for what to check after upgrading.
+
+* The web service now applies `retention.keep`, `sync.retry_failed_after`, `sync.skip_metadata` and `sync.affinity_key`; previously scheduled syncs ignored them, so old recordings were never deleted. An empty `keep` keeps recordings forever.
+* Live progress and log streaming work under waitress; they returned 500 in production.
+* A download cut short by the dashcam is kept as a partial and resumed, instead of being saved as complete.
+* Fix a file-descriptor leak on every scheduled sync that exhausted the process after about 10 days.
+* Security: `PATCH /api/settings/auth` can no longer overwrite the password hash or session secret; `X-Forwarded-For` is only honored with `BLACKVUESYNC_TRUST_PROXY`, so proxy auth and the login rate limiter can't be spoofed; no public fallback session key; password changes and session rotation sign out other sessions immediately; CSP drops `'unsafe-inline'`.
+* Cron schedules follow standard cron: day-of-week `0`/`7` is Sunday (previously Monday), and day-of-month/day-of-week combine with OR. Invalid cron expressions and timezones are rejected, and a bad stored schedule falls back to `*/15 * * * *` UTC instead of crash-looping.
+* Settings are type-checked (422 instead of 500); `keep`, `retry_failed_after` and include/exclude codes use the same parsers as the CLI.
+* `BLACKVUESYNC_ADMIN_PASSWORD` now sets the admin password on first start.
+* Progress counts files rather than recordings, reports already-downloaded files as skipped, and shows early failures such as an unreachable dashcam.
+* Viewer: recordings with `L`/`S` upload-flag filenames play; rear-only recordings play once; GPS timing no longer runs ahead of the video; `nan` speeds no longer produce invalid JSON.
+* The web UI shows errors for failed actions, redirects to login when a session expires, and keeps working on pages open longer than an hour.
+* Docker: `/config` is created and owned by the service user, so the container starts without a `/config` mount; waitress runs 32 threads; at most 16 live-update streams.
+
 ## 2.8.0a0
 
 * Add recording viewer (`/viewer`): front/rear playback, GPS track on a map, G-sensor chart, and journey auto-advance. New `viewer` settings section (`journey_mode`, `speed_unit`). (#21)
