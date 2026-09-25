@@ -56,6 +56,8 @@ class SyncProgress:  # pylint: disable=too-many-instance-attributes
     files_failed: int
     bytes_downloaded_total: int
     last_event_monotonic: float
+    # files found already downloaded or recently failed; excluded from files_total
+    files_skipped: int = 0
 
     @classmethod
     def idle(cls) -> SyncProgress:
@@ -87,8 +89,8 @@ class SyncProgress:  # pylint: disable=too-many-instance-attributes
 class ProgressPublisher:
     """thread-safe owner of sync progress state.
 
-    the writer api (begin_job, start_file, update_bytes, finish_file, end_job)
-    is called from the sync thread. the reader api (snapshot, subscribe) is
+    the writer api (begin_job, set_total, start_file, update_bytes,
+    finish_file, skip_file, end_job) is called from the sync thread. the reader api (snapshot, subscribe) is
     called from flask handlers. updates to in-memory state are unthrottled;
     publishing to subscribers is rate-limited to PUBLISH_HZ.
     """
@@ -131,6 +133,16 @@ class ProgressPublisher:
             )
             self._force_publish(self._state)
         return job_id
+
+    def set_total(self, files_total: int) -> None:
+        """sets the number of files the running job considers for download."""
+        with self._lock:
+            self._state = dataclasses.replace(
+                self._state,
+                files_total=max(0, files_total - self._state.files_skipped),
+                last_event_monotonic=time.monotonic(),
+            )
+            self._force_publish(self._state)
 
     def start_file(
         self,
@@ -243,6 +255,21 @@ class ProgressPublisher:
             )
             self._force_publish(self._state)
 
+    def skip_file(self) -> None:
+        """records a file that needs no transfer; removes it from files_total."""
+        now_m = time.monotonic()
+        with self._lock:
+            self._state = dataclasses.replace(
+                self._state,
+                files_total=max(0, self._state.files_total - 1),
+                files_skipped=self._state.files_skipped + 1,
+                last_event_monotonic=now_m,
+            )
+            # throttled like update_bytes; skips arrive in fast bursts
+            if now_m - self._last_publish_monotonic >= 1.0 / self.PUBLISH_HZ:
+                self._publish_to_subscribers(self._state)
+                self._last_publish_monotonic = now_m
+
     def end_job(self, success: bool) -> None:
         """transitions the job to complete or failed; retains snapshot for POST_COMPLETE_RETENTION seconds."""
         now_m = time.monotonic()
@@ -254,8 +281,14 @@ class ProgressPublisher:
                 last_event_monotonic=now_m,
             )
             self._force_publish(self._state)
+            if self._retention_timer is not None:
+                self._retention_timer.cancel()
             # schedules reset to idle after retention window
-            t = threading.Timer(self.POST_COMPLETE_RETENTION, self._reset_to_idle)
+            t = threading.Timer(
+                self.POST_COMPLETE_RETENTION,
+                self._reset_to_idle,
+                args=(self._state.job_id,),
+            )
             t.daemon = True
             t.start()
             self._retention_timer = t
@@ -300,9 +333,15 @@ class ProgressPublisher:
     # internal helpers
     # ------------------------------------------------------------------
 
-    def _reset_to_idle(self) -> None:
-        """resets state to idle after the post-complete retention window."""
+    def _reset_to_idle(self, job_id: str) -> None:
+        """resets state to idle after the post-complete retention window.
+
+        no-ops when a newer job has begun since the timer was scheduled; a
+        cancelled timer may still fire if it was already waiting on the lock.
+        """
         with self._lock:
+            if self._state.job_id != job_id or self._state.state == "running":
+                return
             self._retention_timer = None
             self._state = SyncProgress.idle()
             self._force_publish(self._state)
@@ -342,8 +381,14 @@ class _NoopPublisher:
     ) -> None:
         """no-op start_file."""
 
+    def set_total(self, files_total: int) -> None:
+        """no-op set_total."""
+
     def update_bytes(self, downloaded: int, total_bytes: int = 0) -> None:
         """no-op update_bytes."""
+
+    def skip_file(self) -> None:
+        """no-op skip_file."""
 
     def finish_file(self, success: bool, reason: str | None = None) -> None:
         """no-op finish_file."""

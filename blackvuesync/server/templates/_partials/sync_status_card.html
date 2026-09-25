@@ -14,6 +14,9 @@
         {% if snap.files_failed > 0 %}
           ({{ snap.files_failed }} failed)
         {% endif %}
+        {% if snap.files_skipped > 0 %}
+          ({{ snap.files_skipped }} skipped)
+        {% endif %}
       </p>
       {% if snap.current_file %}
         <p class="sync-current-file">

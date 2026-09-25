@@ -20,6 +20,7 @@ document.addEventListener("alpine:init", () => {
       files_completed: 0,
       files_total: 0,
       files_failed: 0,
+      files_skipped: 0,
       current_file: null,
     },
     paused: false,

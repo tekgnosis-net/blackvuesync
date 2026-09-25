@@ -240,9 +240,15 @@ def test_do_sync_records_a_row_and_finalizes_metrics(
         connection=types.SimpleNamespace(address="1.2.3.4", timeout_seconds=10.0),
         system=types.SimpleNamespace(destination=str(destination), dry_run=False),
         sync=types.SimpleNamespace(
-            grouping="none", priority="date", include=(), exclude=()
+            grouping="none",
+            priority="date",
+            include=(),
+            exclude=(),
+            retry_failed_after="1d",
+            skip_metadata=(),
+            affinity_key=None,
         ),
-        retention=types.SimpleNamespace(max_used_disk_percent=90),
+        retention=types.SimpleNamespace(keep="", max_used_disk_percent=90),
         metrics=types.SimpleNamespace(
             file=None,
             pushgateway_url=None,
@@ -302,9 +308,15 @@ def test_do_sync_records_failure_row_when_sync_raises(
         connection=types.SimpleNamespace(address="1.2.3.4", timeout_seconds=10.0),
         system=types.SimpleNamespace(destination=str(destination), dry_run=False),
         sync=types.SimpleNamespace(
-            grouping="none", priority="date", include=(), exclude=()
+            grouping="none",
+            priority="date",
+            include=(),
+            exclude=(),
+            retry_failed_after="1d",
+            skip_metadata=(),
+            affinity_key=None,
         ),
-        retention=types.SimpleNamespace(max_used_disk_percent=90),
+        retention=types.SimpleNamespace(keep="", max_used_disk_percent=90),
         metrics=types.SimpleNamespace(
             file=None,
             pushgateway_url=None,

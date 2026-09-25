@@ -135,11 +135,20 @@ Returns the current sync progress snapshot as JSON.
   "files_total": 12,
   "files_completed": 3,
   "files_failed": 0,
+  "files_skipped": 40,
   "bytes_downloaded_total": 157286400
 }
 ```
 
 When no sync has run, `state` is `"idle"` and most fields are zero.
+
+File counts are per file (video, thumbnail, accelerometer and GPS files each
+count once; types excluded by `sync.skip_metadata` are not counted). A job
+starts with `files_total` 0 while the dashcam is listed, so listing failures
+still end the job as `"failed"`. Files that need no transfer (already
+downloaded, or blocked by a recent failure marker) are counted in
+`files_skipped` and removed from `files_total`, so `files_completed +
+files_failed` reaches `files_total` at the end of a successful run.
 
 ### `GET /api/sync/progress/stream`
 

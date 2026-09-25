@@ -606,6 +606,10 @@ def _stream_response(
     return downloaded
 
 
+class TruncatedDownloadError(Exception):
+    """describes a download that ended before the expected number of bytes arrived."""
+
+
 def _log_download_success(
     filename: str,
     destination_filepath: str,
@@ -695,10 +699,11 @@ def _transfer_to_temp(  # pylint: disable=too-many-arguments,too-many-positional
     temp_filepath: str,
     resume_from: int,
     on_chunk: Callable[[int, int], None] | None,
-) -> tuple[bool, int, float]:
+) -> tuple[bool, int, float, int]:
     """opens the dashcam HTTP connection, streams the body to the temp file, and
-    returns (needs_restart, transferred, elapsed_s). raises HTTPError/URLError/
-    socket.timeout on network failures; does not rename or log success."""
+    returns (needs_restart, transferred, elapsed_s, expected_size), where
+    expected_size is the full file size or 0 when unknown. raises HTTPError/
+    URLError/socket.timeout on network failures; does not rename or log success."""
     if resume_from:
         logger.debug(
             "Found incomplete download : %s",
@@ -715,6 +720,7 @@ def _transfer_to_temp(  # pylint: disable=too-many-arguments,too-many-positional
     start = time.perf_counter()
     needs_restart = False
     transferred = 0
+    total_bytes = 0
     try:
         request = _build_record_request(url, resume_from)
         with urllib.request.urlopen(request) as response:
@@ -736,7 +742,7 @@ def _transfer_to_temp(  # pylint: disable=too-many-arguments,too-many-positional
     finally:
         elapsed_s = time.perf_counter() - start
 
-    return needs_restart, transferred, elapsed_s
+    return needs_restart, transferred, elapsed_s, total_bytes
 
 
 def _handle_http_error(  # pylint: disable=too-many-arguments,too-many-positional-arguments
@@ -749,6 +755,7 @@ def _handle_http_error(  # pylint: disable=too-many-arguments,too-many-positiona
     resume_from: int,
     metrics: SyncMetrics | None,
     on_chunk: Callable[[int, int], None] | None,
+    on_start: Callable[[], None] | None = None,
 ) -> tuple[bool, int | None]:
     """handles an HTTPError raised during a download attempt; either restarts
     the download (416 with a partial present) or records the failure and returns."""
@@ -761,7 +768,7 @@ def _handle_http_error(  # pylint: disable=too-many-arguments,too-many-positiona
         with contextlib.suppress(OSError):
             os.remove(temp_filepath)
         return download_file(
-            base_url, filename, destination, group_name, metrics, on_chunk
+            base_url, filename, destination, group_name, metrics, on_chunk, on_start
         )
     # other HTTP errors (e.g. 500 for corrupted recordings); marks as failed
     if metrics:
@@ -771,15 +778,19 @@ def _handle_http_error(  # pylint: disable=too-many-arguments,too-many-positiona
     return False, None
 
 
-def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arguments
+def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
     base_url: str,
     filename: str,
     destination: str,
     group_name: str | None,
     metrics: SyncMetrics | None = None,
     on_chunk: Callable[[int, int], None] | None = None,
+    on_start: Callable[[], None] | None = None,
 ) -> tuple[bool, int | None]:
-    """downloads a file from the dashcam to the destination directory; returns whether data was transferred"""
+    """downloads a file from the dashcam to the destination directory; returns whether data was transferred.
+
+    on_start is called once the guard checks pass and a transfer is attempted,
+    so callers can tell skipped files from attempted ones."""
     # if we have a group name, we may not have ensured it exists yet
     if group_name:
         ensure_destination(os.path.join(destination, group_name))
@@ -792,6 +803,9 @@ def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arg
     if precheck is not None:
         return precheck
 
+    if on_start is not None:
+        on_start()
+
     # clears any prior failure marker now that we've decided to retry
     remove_download_failed_marker(destination, group_name, filename)
 
@@ -799,7 +813,7 @@ def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arg
     resume_from = _resume_offset(temp_filepath)
 
     try:
-        needs_restart, transferred, elapsed_s = _transfer_to_temp(
+        needs_restart, transferred, elapsed_s, expected_size = _transfer_to_temp(
             base_url, filename, temp_filepath, resume_from, on_chunk
         )
     except urllib.error.HTTPError as e:
@@ -813,6 +827,7 @@ def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arg
             resume_from,
             metrics,
             on_chunk,
+            on_start,
         )
     except urllib.error.URLError as e:
         # network-level errors (connection reset, etc.); does not mark as failed
@@ -831,8 +846,25 @@ def download_file(  # pylint: disable=too-many-arguments,too-many-positional-arg
         with contextlib.suppress(OSError):
             os.remove(temp_filepath)
         return download_file(
-            base_url, filename, destination, group_name, metrics, on_chunk
+            base_url, filename, destination, group_name, metrics, on_chunk, on_start
         )
+
+    # read() returns b"" on a premature close instead of raising, so a short
+    # body is detected here; the partial is kept so the next run resumes it.
+    if (
+        expected_size
+        and (actual_size := _resume_offset(temp_filepath)) != expected_size
+    ):
+        if metrics:
+            metrics.record_file_download_failure("network")
+        _log_download_failure(
+            filename,
+            TruncatedDownloadError(
+                f"connection closed after {actual_size} of {expected_size} bytes"
+            ),
+            marker=False,
+        )
+        return False, None
 
     os.rename(temp_filepath, destination_filepath)
     speed_bps = int(10.0 * transferred / elapsed_s) if transferred else None
@@ -869,18 +901,26 @@ def download_recording(  # pylint: disable=too-many-locals
     # whether any file of a recording (video, thumbnail, gps, accel.) was downloaded
     any_downloaded = False
 
-    def _dl(  # pylint: disable=too-many-arguments,too-many-positional-arguments
-        fn: str,
-        artifact_type: str,
-    ) -> tuple[bool, int | None]:
-        """wraps download_file with publisher start/finish notifications."""
-        if publisher is not None:
+    def _dl(fn: str, artifact_type: str) -> tuple[bool, int | None]:
+        """wraps download_file with publisher notifications; files that need
+        no transfer (already present, recently failed) are reported as skipped."""
+        if publisher is None:
+            return download_file(
+                base_url, fn, destination, recording.group_name, metrics
+            )
+
+        started = False
+
+        def _start() -> None:
+            nonlocal started
+            started = True
             publisher.start_file(
                 fn,
                 artifact_type,  # type: ignore[arg-type]
                 0,
                 direction=cast(Literal["F", "R", "I", "O"], recording.direction),
             )
+
         try:
             result = download_file(
                 base_url,
@@ -888,15 +928,23 @@ def download_recording(  # pylint: disable=too-many-locals
                 destination,
                 recording.group_name,
                 metrics,
-                on_chunk=publisher.update_bytes if publisher is not None else None,
+                on_chunk=publisher.update_bytes,
+                on_start=_start,
             )
-            if publisher is not None:
-                publisher.finish_file(success=result[0])
-            return result
         except Exception as exc:
-            if publisher is not None:
-                publisher.finish_file(success=False, reason=type(exc).__name__)
+            if not started:
+                _start()
+            publisher.finish_file(success=False, reason=type(exc).__name__)
             raise
+        if started:
+            publisher.finish_file(success=result[0])
+        elif result[0]:
+            # dry run: reported as a completed file without a transfer
+            _start()
+            publisher.finish_file(success=True)
+        else:
+            publisher.skip_file()
+        return result
 
     speed_bps: int | None = None
     for artifact_type, skip_key, build_filename in _ARTIFACTS:
@@ -1178,7 +1226,7 @@ def prepare_destination(destination: str, grouping: str) -> None:
                 os.remove(outdated_filepath)
 
 
-def sync(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
+def sync(  # pylint: disable=too-many-arguments,too-many-positional-arguments
     address: str,
     destination: str,
     grouping: str,
@@ -1190,6 +1238,40 @@ def sync(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
     job_id: str | None = None,
 ) -> None:
     """synchronizes the recordings at the dashcam address with the destination directory"""
+    # begins the job before listing so early failures (e.g. dashcam
+    # unreachable) surface as a failed job; the total is set once known.
+    if publisher is not None:
+        publisher.begin_job(0, job_id=job_id)
+
+    sync_success = False
+    try:
+        _sync_recordings(
+            address,
+            destination,
+            grouping,
+            download_priority,
+            include,
+            exclude,
+            metrics,
+            publisher,
+        )
+        sync_success = True
+    finally:
+        if publisher is not None:
+            publisher.end_job(sync_success)
+
+
+def _sync_recordings(  # pylint: disable=too-many-arguments,too-many-positional-arguments,too-many-locals
+    address: str,
+    destination: str,
+    grouping: str,
+    download_priority: str,
+    include: tuple[str, ...] | None,
+    exclude: tuple[str, ...] | None,
+    metrics: SyncMetrics | None,
+    publisher: _AnyPublisher | None,
+) -> None:
+    """lists, filters, and downloads recordings; the body of sync()."""
     prepare_destination(destination, grouping)
 
     # BlackVue dashcam firmware exposes only HTTP on the LAN web server;
@@ -1226,16 +1308,13 @@ def sync(  # pylint: disable=too-many-arguments,too-many-positional-arguments,to
     prune_orphan_partials(destination, expected_filenames)
 
     if publisher is not None:
-        publisher.begin_job(len(current_dashcam_recordings), job_id=job_id)
+        artifacts_per_recording = sum(
+            1 for _, skip_key, _ in _ARTIFACTS if skip_key not in skip_metadata
+        )
+        publisher.set_total(len(current_dashcam_recordings) * artifacts_per_recording)
 
-    sync_success = False
-    try:
-        for recording in current_dashcam_recordings:
-            download_recording(base_url, recording, destination, metrics, publisher)
-        sync_success = True
-    finally:
-        if publisher is not None:
-            publisher.end_job(sync_success)
+    for recording in current_dashcam_recordings:
+        download_recording(base_url, recording, destination, metrics, publisher)
 
 
 def is_empty_directory(dirpath: str) -> bool:
@@ -1326,5 +1405,8 @@ def lock(destination: str) -> int:
 
 
 def unlock(lf_fd: int) -> None:
-    """unlocks the lock file; does not remove because another process may lock it in the meantime"""
-    fcntl.lockf(lf_fd, fcntl.LOCK_UN)
+    """unlocks and closes the lock file; does not remove because another process may lock it in the meantime"""
+    try:
+        fcntl.lockf(lf_fd, fcntl.LOCK_UN)
+    finally:
+        os.close(lf_fd)
