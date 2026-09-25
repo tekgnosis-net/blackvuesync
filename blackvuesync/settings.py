@@ -825,8 +825,7 @@ class SettingsStore:
             self._settings = new
         # snapshots the listeners list so a callback that registers a new
         # listener (via on_change()) cannot mutate the list mid-iteration.
-        # (suppresses S7504.)
-        for listener in list(self._listeners):  # NOSONAR
+        for listener in list(self._listeners):
             try:
                 listener(old, new)
             except Exception:  # pylint: disable=broad-exception-caught

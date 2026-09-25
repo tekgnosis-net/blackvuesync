@@ -39,7 +39,7 @@ def _fetch_text(url: str, timeout: float) -> str | None:
     exists).
     """
     try:
-        with urllib.request.urlopen(url, timeout=timeout) as resp:  # NOSONAR
+        with urllib.request.urlopen(url, timeout=timeout) as resp:
             body: bytes = resp.read()
             return body.decode("utf-8", errors="replace")
     except OSError:
@@ -107,10 +107,9 @@ def _compute_dashcam_info(
     if not address:
         return {_KEY_AVAILABLE: False, "reason": "no address configured"}
 
-    # blackvue firmware is http-only (no https); the trailing markers on the
-    # two url literals below silence the clear-text-http check.
-    version_url = f"http://{address}/Config/version.bin"  # NOSONAR
-    config_url = f"http://{address}/Config/config.ini"  # NOSONAR
+    # blackvue firmware is http-only (no https).
+    version_url = f"http://{address}/Config/version.bin"
+    config_url = f"http://{address}/Config/config.ini"
     firmware_raw = _fetch_text(version_url, timeout)
     config_raw = _fetch_text(config_url, timeout)
 

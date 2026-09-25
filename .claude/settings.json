@@ -26,8 +26,6 @@
       "Skill(pr-review-toolkit:review-pr:*)",
       "Skill(pr-review-toolkit:review-pr)",
       "WebFetch(domain:api.github.com)",
-      "WebFetch(domain:docs.sonarcloud.io)",
-      "WebFetch(domain:docs.sonarsource.com)",
       "WebFetch(domain:files.pythonhosted.org)",
       "WebFetch(domain:github.com)",
       "WebFetch(domain:githubstatus.com)",

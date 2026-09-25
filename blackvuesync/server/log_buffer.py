@@ -129,8 +129,8 @@ class LogBuffer(logging.Handler):
             )
             self._lines.append(line)
             # snapshot the subscriber set so a concurrent subscribe/unsubscribe
-            # cannot mutate the iteration target. (suppresses python:S7504.)
-            for sub in list(self._subscribers):  # NOSONAR
+            # cannot mutate the iteration target.
+            for sub in list(self._subscribers):
                 with contextlib.suppress(queue.Full):
                     sub.put_nowait(line)
 

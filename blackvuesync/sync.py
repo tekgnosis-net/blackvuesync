@@ -1276,8 +1276,8 @@ def _sync_recordings(  # pylint: disable=too-many-arguments,too-many-positional-
 
     # BlackVue dashcam firmware exposes only HTTP on the LAN web server;
     # HTTPS is not supported at the device. Deployment context is a trusted
-    # LAN. The trailing NOSONAR on the next line suppresses python:S5332.
-    base_url = f"http://{address}"  # NOSONAR
+    # LAN.
+    base_url = f"http://{address}"
     dashcam_filenames = get_dashcam_filenames(base_url)
     dashcam_recordings = [
         r for x in dashcam_filenames if (r := to_recording(x, grouping)) is not None
@@ -1378,8 +1378,8 @@ def lock(destination: str) -> int:
     # bare-metal deployments. the umask is cleared so the requested mode is
     # not masked away (see https://stackoverflow.com/a/15015748/832230).
     # phase g may tighten this to 0o600 once the deployment model is
-    # finalized; phase a preserves upstream behavior. (suppresses python:S2612.)
-    umask_original = os.umask(0)  # NOSONAR
+    # finalized; phase a preserves upstream behavior.
+    umask_original = os.umask(0)
 
     try:
         lf_fd = os.open(lf_path, lf_flags, lf_mode)

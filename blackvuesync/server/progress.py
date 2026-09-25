@@ -354,8 +354,8 @@ class ProgressPublisher:
     def _publish_to_subscribers(self, snapshot: SyncProgress) -> None:
         """puts snapshot in every subscriber queue; drops frames for slow consumers."""
         # snapshot the subscriber set so a concurrent subscribe/unsubscribe
-        # cannot mutate the iteration target. (suppresses python:S7504.)
-        for sub in list(self._subscribers):  # NOSONAR
+        # cannot mutate the iteration target.
+        for sub in list(self._subscribers):
             with contextlib.suppress(queue.Full):
                 sub.put_nowait(snapshot)
 
