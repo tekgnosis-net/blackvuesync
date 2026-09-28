@@ -178,3 +178,82 @@ def test_gps_nan_speed_is_valid_json(client_and_dest: Any) -> None:
 
 def _reject_constant(name: str) -> None:
     raise ValueError(f"invalid JSON constant {name}")
+
+
+def _second_day(dest: Path) -> None:
+    (dest / "20260608_000030_NF.mp4").write_bytes(b"x")
+    (dest / "20260608_000130_NF.mp4").write_bytes(b"x")
+
+
+def test_days_lists_counts_newest_first(client_and_dest: Any) -> None:
+    client, dest = client_and_dest
+    _second_day(dest)
+    body = json.loads(client.get("/api/viewer/days").data)
+    assert body == {
+        "days": [
+            {"date": "2026-06-08", "count": 2},
+            {"date": "2026-06-07", "count": 2},
+        ]
+    }
+
+
+def test_recordings_defaults_to_the_newest_day(client_and_dest: Any) -> None:
+    client, dest = client_and_dest
+    _second_day(dest)
+    body = json.loads(client.get("/api/viewer/recordings").data)
+    assert [d["date"] for d in body["days"]] == ["2026-06-08"]
+
+
+def test_recordings_date_filters_to_one_day(client_and_dest: Any) -> None:
+    client, dest = client_and_dest
+    _second_day(dest)
+    body = json.loads(client.get("/api/viewer/recordings?date=2026-06-07").data)
+    assert [d["date"] for d in body["days"]] == ["2026-06-07"]
+    assert [r["base_filename"] for r in body["days"][0]["recordings"]] == [
+        "20260607_101600",
+        "20260607_101500",
+    ]
+    empty = json.loads(client.get("/api/viewer/recordings?date=2020-01-01").data)
+    assert empty == {"days": []}
+
+
+def test_recordings_invalid_date_is_422(client_and_dest: Any) -> None:
+    client, _ = client_and_dest
+    resp = client.get("/api/viewer/recordings?date=yesterday")
+    assert resp.status_code == 422
+    assert json.loads(resp.data)["code"] == "INVALID_DATE"
+
+
+def test_days_requires_login(client_and_dest: Any) -> None:
+    _, dest = client_and_dest
+    with patch.dict(os.environ, {"ADDRESS": "1.2.3.4"}, clear=False):
+        anon = create_app(SettingsStore(dest.parent / "s3.json"), testing=True)
+    assert anon.test_client().get("/api/viewer/days").status_code in (302, 401)
+
+
+def test_journey_crosses_midnight_between_daily_directories(
+    client_and_dest: Any,
+) -> None:
+    client, dest = client_and_dest
+    app = client.application
+    app.settings_store.update(
+        lambda s: dataclasses.replace(
+            s, sync=dataclasses.replace(s.sync, grouping="daily")
+        )
+    )
+    for day, name in (
+        ("2026-06-09", "20260609_235930_NF.mp4"),
+        ("2026-06-10", "20260610_000030_NF.mp4"),
+    ):
+        (dest / day).mkdir()
+        (dest / day / name).write_bytes(b"x")
+    body = json.loads(
+        client.get("/api/viewer/recordings/20260609_235930_N/journey").data
+    )
+    assert [s["base_filename"] for s in body["segments"]] == [
+        "20260609_235930",
+        "20260610_000030",
+    ]
+    assert body["segments"][1]["videos"]["F"] == (
+        "/media/2026-06-10/20260610_000030_NF.mp4"
+    )

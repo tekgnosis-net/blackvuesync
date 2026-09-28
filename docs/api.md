@@ -665,11 +665,23 @@ file formats. `viewer.journey_mode` / `viewer.speed_unit` settings tune the page
 
 | Method | Path | Description |
 | --- | --- | --- |
-| GET | `/api/viewer/recordings` | recordings grouped by day, newest first |
+| GET | `/api/viewer/days` | `{"days": [{date, count}]}`, newest day first |
+| GET | `/api/viewer/recordings?date=YYYY-MM-DD` | one day's recordings, newest first; without `date`, the newest day |
 | GET | `/api/viewer/recordings/<base>_<type>/journey` | forward chain of contiguous segments |
 | GET | `/api/viewer/recordings/<base>_<type>/gps` | `{"points": [{t, lat, lon, speed}]}` |
 | GET | `/api/viewer/recordings/<base>_<type>/gsensor` | `{"samples": [{t, x, y, z}]}` |
 | GET | `/media/<path>` | path-safe `.mp4`/`.thm` serving (HTTP Range) |
+
+`/recordings` returns `{"days": [{"date", "recordings": [...]}]}` holding at
+most one day, so a library of tens of thousands of recordings is never sent in
+one response. An unknown date returns `{"days": []}`; a malformed one returns
+`422` with code `INVALID_DATE`. The viewer page lists `/days` and loads a
+day's recordings when it is opened.
+
+All viewer endpoints read a shared in-memory index that is refreshed per
+directory by modification time: a request costs one `stat` per directory and
+re-lists only directories whose contents changed. Hidden directories and NAS
+system directories (`@eaDir`, `#recycle`, `#snapshot`) are skipped.
 
 ---
 

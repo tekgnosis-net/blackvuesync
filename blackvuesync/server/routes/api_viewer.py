@@ -1,20 +1,22 @@
-"""api routes for the dashcam viewer: recordings, journey chain, gps, gsensor."""
+"""api routes for the dashcam viewer: days, recordings, journey, gps, gsensor."""
 
 from __future__ import annotations
 
 import dataclasses
+import datetime
 import json
 from pathlib import Path
 
-from flask import Blueprint, Response, abort, current_app
+from flask import Blueprint, Response, abort, current_app, request
 
 from blackvuesync.server.auth import login_required
 from blackvuesync.server.gps import parse_gps
 from blackvuesync.server.gsensor import parse_gsensor
 from blackvuesync.server.viewer_index import (
     RecordingEntry,
+    RecordingIndex,
     journey_chain,
-    list_recordings,
+    recording_index,
 )
 from blackvuesync.settings import Settings, SettingsStore
 
@@ -58,18 +60,19 @@ def _segment_dict(entry: RecordingEntry) -> dict[str, object]:
     }
 
 
-def _all_entries() -> list[RecordingEntry]:
+def _index() -> RecordingIndex:
     settings = _settings()
-    return list_recordings(settings.system.destination, settings.sync.grouping)
+    return recording_index(settings.system.destination, settings.sync.grouping)
 
 
-def _find(entries: list[RecordingEntry], key: str) -> RecordingEntry | None:
+def _find(key: str) -> RecordingEntry | None:
     """resolves a `<base>_<type>` key (e.g. 20260607_101500_N) to an entry."""
     base, _, rtype = key.rpartition("_")
-    for entry in entries:
-        if entry.base_filename == base and entry.type == rtype:
-            return entry
-    return None
+    return _index().find(base, rtype)
+
+
+def _json(payload: object, status: int = 200) -> Response:
+    return Response(json.dumps(payload), status=status, mimetype=_MIME_JSON)
 
 
 def _sidecar_path(entry: RecordingEntry, suffix: str) -> Path:
@@ -83,31 +86,58 @@ def _sidecar_path(entry: RecordingEntry, suffix: str) -> Path:
     return base / entry.rel_dir / rel if entry.rel_dir else base / rel
 
 
+@api_viewer_bp.route("/days", methods=["GET"])
+@login_required
+def days() -> Response:
+    """returns the calendar days that have recordings, newest first, with counts."""
+    return _json(
+        {"days": [{"date": d, "count": len(recs)} for d, recs in _index().days()]}
+    )
+
+
 @api_viewer_bp.route("/recordings", methods=["GET"])
 @login_required
 def recordings() -> Response:
-    """returns recordings grouped by calendar day, newest day + item first."""
-    entries = _all_entries()
-    days: dict[str, list[dict[str, object]]] = {}
-    for entry in entries:  # already newest-first
-        days.setdefault(entry.datetime.date().isoformat(), []).append(
-            _segment_dict(entry)
-        )
-    body = json.dumps(
-        {"days": [{"date": d, "recordings": recs} for d, recs in days.items()]}
+    """returns one day's recordings (?date=YYYY-MM-DD, default newest day).
+
+    the listing is day-scoped so a library of tens of thousands of recordings
+    never reaches the browser in one response.
+    """
+    all_days = _index().days()
+    date = request.args.get("date")
+    if date is None:
+        selected = all_days[:1]
+    else:
+        try:
+            iso = datetime.date.fromisoformat(date).isoformat()
+        except ValueError:
+            return _json(
+                {
+                    "error": "date must be YYYY-MM-DD",
+                    "code": "INVALID_DATE",
+                    "details": {"date": date},
+                },
+                status=422,
+            )
+        selected = [(d, recs) for d, recs in all_days if d == iso]
+    return _json(
+        {
+            "days": [
+                {"date": d, "recordings": [_segment_dict(e) for e in recs]}
+                for d, recs in selected
+            ]
+        }
     )
-    return Response(body, status=200, mimetype=_MIME_JSON)
 
 
 @api_viewer_bp.route("/recordings/<key>/journey", methods=["GET"])
 @login_required
 def journey(key: str) -> Response:
     """returns the forward chain of contiguous same-type segments from <key>."""
-    entries = _all_entries()
-    start = _find(entries, key)
+    start = _find(key)
     if start is None:
         abort(404)
-    chain = journey_chain(entries, start.base_filename, start.type)
+    chain = journey_chain(_index().entries(), start.base_filename, start.type)
     body = json.dumps({"segments": [_segment_dict(e) for e in chain]})
     return Response(body, status=200, mimetype=_MIME_JSON)
 
@@ -116,7 +146,7 @@ def journey(key: str) -> Response:
 @login_required
 def gps(key: str) -> Response:
     """returns the parsed GPS track for one recording instant."""
-    entry = _find(_all_entries(), key)
+    entry = _find(key)
     if entry is None or not entry.has_gps:
         abort(404)
     # file may have vanished since enumeration; an OSError (-> 500) is an acceptable, honest failure
@@ -129,7 +159,7 @@ def gps(key: str) -> Response:
 @login_required
 def gsensor(key: str) -> Response:
     """returns the parsed G-sensor samples for one recording instant."""
-    entry = _find(_all_entries(), key)
+    entry = _find(key)
     if entry is None or not entry.has_3gf:
         abort(404)
     # file may have vanished since enumeration; an OSError (-> 500) is an acceptable, honest failure

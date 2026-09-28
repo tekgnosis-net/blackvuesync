@@ -2,12 +2,19 @@
 
 from __future__ import annotations
 
+import os
+import time
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 from blackvuesync.server.viewer_index import (
     RecordingEntry,
+    RecordingIndex,
     journey_chain,
     list_recordings,
+    recording_index,
 )
 
 
@@ -127,3 +134,112 @@ def test_unflagged_video_preferred_when_both_present(tmp_path: Path) -> None:
     _touch(tmp_path, "20260607_101500_NF.mp4")
     (e,) = list_recordings(str(tmp_path), "none")
     assert e.video_files == (("F", "20260607_101500_NF.mp4"),)
+
+
+def _age(path: Path, seconds: int = 3600) -> None:
+    """backdates path's mtime past the racy window so the cache trusts it."""
+    past = time.time() - seconds
+    os.utime(path, (past, past))
+
+
+def _daily_tree(root: Path) -> None:
+    for day, names in {
+        "2026-06-07": ("20260607_101500_NF.mp4", "20260607_101500_NR.mp4"),
+        "2026-06-08": ("20260608_080000_EF.mp4",),
+    }.items():
+        (root / day).mkdir()
+        for name in names:
+            _touch(root / day, name)
+        _age(root / day)
+    _age(root)
+
+
+def _count_scandirs(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    calls: list[str] = []
+    real = os.scandir
+
+    def spy(path: str) -> Any:
+        calls.append(path)
+        return real(path)
+
+    monkeypatch.setattr(os, "scandir", spy)
+    return calls
+
+
+def test_index_relists_only_changed_directories(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _daily_tree(tmp_path)
+    index = RecordingIndex(str(tmp_path), "daily")
+    calls = _count_scandirs(monkeypatch)
+    assert len(index.entries()) == 2
+    assert len(calls) == 3  # root + two day directories
+
+    calls.clear()
+    assert len(index.entries()) == 2
+    assert calls == []  # nothing changed: stats only
+
+    _touch(tmp_path / "2026-06-08", "20260608_090000_NF.mp4")
+    _age(tmp_path / "2026-06-08", seconds=60)
+    calls.clear()
+    assert [e.base_filename for e in index.entries()][:2] == [
+        "20260608_090000",
+        "20260608_080000",
+    ]
+    assert calls == [str(tmp_path / "2026-06-08")]
+
+
+def test_index_relists_a_directory_changed_within_the_racy_window(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _daily_tree(tmp_path)
+    os.utime(tmp_path / "2026-06-08")  # mtime = now: listing is not trusted
+    index = RecordingIndex(str(tmp_path), "daily")
+    index.entries()
+    calls = _count_scandirs(monkeypatch)
+    index.entries()
+    assert calls == [str(tmp_path / "2026-06-08")]
+
+
+def test_index_days_find_and_removed_directory(tmp_path: Path) -> None:
+    _daily_tree(tmp_path)
+    index = RecordingIndex(str(tmp_path), "daily")
+    assert [(d, len(recs)) for d, recs in index.days()] == [
+        ("2026-06-08", 1),
+        ("2026-06-07", 1),
+    ]
+    found = index.find("20260607_101500", "N")
+    assert found is not None and found.directions == ("F", "R")
+    assert index.find("20260607_101500", "E") is None
+
+    for child in (tmp_path / "2026-06-08").iterdir():
+        child.unlink()
+    (tmp_path / "2026-06-08").rmdir()
+    assert [d for d, _ in index.days()] == ["2026-06-07"]
+
+
+def test_index_skips_hidden_and_nas_system_directories(tmp_path: Path) -> None:
+    _daily_tree(tmp_path)
+    for special in ("#recycle", "@eaDir", ".snapshot"):
+        (tmp_path / special).mkdir()
+        _touch(tmp_path / special, "20260601_000000_NF.mp4")
+    index = RecordingIndex(str(tmp_path), "daily")
+    assert {e.base_filename for e in index.entries()} == {
+        "20260607_101500",
+        "20260608_080000",
+    }
+
+
+def test_index_on_missing_destination_is_empty(tmp_path: Path) -> None:
+    index = RecordingIndex(str(tmp_path / "absent"), "none")
+    assert index.entries() == [] and index.days() == []
+
+
+def test_recording_index_is_shared_per_destination_and_grouping(
+    tmp_path: Path,
+) -> None:
+    first = recording_index(str(tmp_path), "daily")
+    assert recording_index(str(tmp_path), "daily") is first
+    other = recording_index(str(tmp_path), "none")
+    assert other is not first
+    assert recording_index(str(tmp_path), "daily") is not first

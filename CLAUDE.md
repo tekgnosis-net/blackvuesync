@@ -231,8 +231,9 @@ application, structured as follows:
 - `routes/api_schedule.py` -- `POST /api/schedule/pause|resume`.
 - `routes/api_logs.py` -- `/api/logs/recent` snapshot and `/api/logs/stream` SSE.
 - `routes/api_stats.py` -- `/api/stats/series` (summary, series, disk forecast).
-- `routes/api_viewer.py` -- `/api/viewer/recordings` and per-recording
-  `journey`, `gps`, `gsensor`.
+- `routes/api_viewer.py` -- `/api/viewer/days`, day-scoped
+  `/api/viewer/recordings?date=`, and per-recording `journey`, `gps`,
+  `gsensor`. Never returns the whole library in one response.
 - `routes/media.py` -- `/media/<path>` serves `.mp4`/`.thm` from the destination
   with HTTP Range; guarded by an extension allow-list, `safe_join`, and a
   realpath-containment check.
@@ -253,7 +254,13 @@ application, structured as follows:
   `stats.retention_days`.
 - `forecast.py` -- least-squares disk-usage projection for the stats page.
 - `viewer_index.py` -- enumerates downloaded recordings and computes journey
-  chains of contiguous segments.
+  chains of contiguous segments. `RecordingIndex` (shared per destination +
+  grouping via `recording_index()`) caches each directory's listing keyed by
+  its mtime and re-lists only changed directories; listings younger than the
+  2 s racy-mtime window are re-read on the next lookup. Skips `.`, `@` and `#`
+  directories (Synology `@eaDir`, `#recycle`). `list_recordings()` stays the
+  uncached walk. Scale reference: 42,706 recordings (~256k files) render in
+  ~2 s cold / ~0.2 s warm.
 - `gps.py` / `gsensor.py` -- stdlib parsers for `.gps` (NMEA) and `.3gf`
   (big-endian binary) sidecars; formats in `docs/reference/blackvue-file-formats.md`.
 - `settings_form.py` -- field descriptors that drive the settings page.
@@ -387,7 +394,7 @@ Two logger hierarchies:
 - `test/test_stats_store.py`, `test/test_forecast.py` -- stats persistence and
   disk forecast
 - `test/test_gps.py`, `test/test_gsensor.py`, `test/test_viewer_index.py` --
-  viewer parsers and index
+  viewer parsers, index and per-directory cache
 - `test/test_settings_form.py`, `test/test_settings_page.py`,
   `test/test_dashboard_render.py`, `test/test_dashboard_sse_handoff.py` --
   page rendering
