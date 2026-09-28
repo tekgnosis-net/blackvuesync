@@ -121,7 +121,7 @@ def test_stats_500_shows_error(live_server: Any, page: Page) -> None:
 
 def test_viewer_401_redirects_to_login(live_server: Any, page: Page) -> None:
     _login(page, live_server.url)
-    page.route("**/api/viewer/recordings", _unauthorized)
+    page.route("**/api/viewer/days", _unauthorized)
     page.goto(f"{live_server.url}/viewer")
     expect(page).to_have_url(re.compile(r"/login\?next=%2Fviewer$"))
 
@@ -132,7 +132,7 @@ def test_viewer_redirected_to_login_page_is_detected(
     # a legacy 302 to /login that fetch follows must still count as logged out
     _login(page, live_server.url)
     page.route(
-        "**/api/viewer/recordings",
+        "**/api/viewer/days",
         lambda r: r.fulfill(status=302, headers={"Location": "/login?next=/x"}),
     )
     page.goto(f"{live_server.url}/viewer")

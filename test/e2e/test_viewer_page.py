@@ -143,7 +143,7 @@ def test_marker_lookup_stays_in_segment_and_offsets_use_video_duration(
     live_server: Any, page: Page
 ) -> None:
     _login(page, live_server.url)
-    with page.expect_response(lambda r: "/api/viewer/recordings" in r.url):
+    with page.expect_response(lambda r: "/api/viewer/days" in r.url):
         page.goto(f"{live_server.url}/viewer")
     result = page.evaluate(
         """() => {
@@ -173,3 +173,35 @@ def test_marker_lookup_stays_in_segment_and_offsets_use_video_duration(
         "span": 45,
         "video": 30.5 + 60,
     }
+
+
+def test_sidebar_lists_days_and_loads_a_day_on_open(
+    live_server: Any, page: Page
+) -> None:
+    dest = live_server.destination
+    _seed(dest)  # 2026-06-07
+    (dest / "20260608_090000_EF.mp4").write_bytes(b"\x00")
+    (dest / "20260608_090000_EF.thm").write_bytes(b"\xff\xd8\xff\xe0\x00\x10JFIF")
+    _login(page, live_server.url)
+
+    requested: list[str] = []
+    page.on("request", lambda r: requested.append(r.url))
+    page.goto(f"{live_server.url}/viewer")
+
+    days = page.locator(".viewer-day")
+    expect(days).to_have_count(2)
+    newest, older = days.nth(0), days.nth(1)
+    expect(newest.locator(".viewer-day-label")).to_have_attribute(
+        "aria-expanded", "true"
+    )
+    expect(newest.locator(".viewer-rec")).to_have_count(1)
+    expect(newest.locator(".viewer-rec img")).to_have_attribute("loading", "lazy")
+    expect(older.locator(".viewer-rec")).to_have_count(0)
+    assert not any("date=2026-06-07" in url for url in requested)
+
+    with page.expect_response(lambda r: "date=2026-06-07" in r.url):
+        older.locator(".viewer-day-label").click()
+    expect(older.locator(".viewer-rec")).to_have_count(1)
+
+    older.locator(".viewer-day-label").click()  # collapses without refetching
+    expect(older.locator(".viewer-day-body")).to_be_hidden()

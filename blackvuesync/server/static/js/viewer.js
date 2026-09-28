@@ -7,6 +7,7 @@ const KMH_PER_KNOT = 1.852;
 const MPH_PER_KNOT = 1.15078;
 const DRIFT_TOLERANCE = 0.15; // seconds before re-pinning the slave video
 const RECORDINGS_API = "/api/viewer/recordings";
+const DAYS_API = "/api/viewer/days";
 const DEFAULT_SEGMENT_SECONDS = 60; // blackvue writes ~1-minute segments
 
 function fmtTime(seconds) {
@@ -68,6 +69,7 @@ const viewer = {
   journeyMode: "progressive",
   chain: [],
   index: 0,
+  activeKey: null,
   _selectSeq: 0, // generation token: bumped per selection; stale awaits bail
 
   init() {
@@ -96,26 +98,74 @@ const viewer = {
     if (el) el.hidden = true;
   },
 
+  sidebarNote(parent, text) {
+    const note = document.createElement("p");
+    note.className = "viewer-note";
+    note.textContent = text;
+    parent.replaceChildren(note);
+  },
+
+  // the sidebar lists days only; a day's recordings load when it is opened,
+  // so a library of tens of thousands of recordings never renders at once.
   async loadRecordings() {
-    const { data, error } = await fetchJson(RECORDINGS_API);
     const side = document.getElementById("viewer-recordings");
-    side.replaceChildren();
+    this.sidebarNote(side, "Loading recordings…");
+    const { data, error } = await fetchJson(DAYS_API);
     if (!data) {
-      const note = document.createElement("p");
-      note.className = "viewer-note";
-      note.textContent = "Could not load recordings (" + error + ").";
-      side.append(note);
+      this.sidebarNote(side, "Could not load recordings (" + error + ").");
       return;
     }
-    for (const day of data.days) {
-      const label = document.createElement("div");
-      label.className = "viewer-day-label";
-      label.textContent = day.date;
-      side.append(label);
-      for (const rec of day.recordings) {
-        side.append(this.recRow(rec));
-      }
+    if (data.days.length === 0) {
+      this.sidebarNote(side, "No recordings downloaded yet.");
+      return;
     }
+    side.replaceChildren(...data.days.map((day) => this.dayGroup(day)));
+    this.toggleDay(side.querySelector(".viewer-day"));
+  },
+
+  dayGroup(day) {
+    const group = document.createElement("div");
+    group.className = "viewer-day";
+    group.dataset.date = day.date;
+    const header = document.createElement("button");
+    header.type = "button";
+    header.className = "viewer-day-label";
+    header.setAttribute("aria-expanded", "false");
+    const date = document.createElement("span");
+    date.textContent = day.date;
+    const count = document.createElement("span");
+    count.className = "viewer-day-count";
+    count.textContent = String(day.count);
+    header.append(date, count);
+    header.addEventListener("click", () => this.toggleDay(group));
+    const body = document.createElement("div");
+    body.className = "viewer-day-body";
+    body.hidden = true;
+    group.append(header, body);
+    return group;
+  },
+
+  async toggleDay(group) {
+    if (!group) return;
+    const header = group.querySelector(".viewer-day-label");
+    const body = group.querySelector(".viewer-day-body");
+    const open = header.getAttribute("aria-expanded") !== "true";
+    header.setAttribute("aria-expanded", String(open));
+    body.hidden = !open;
+    if (!open || group.dataset.loaded) return;
+    group.dataset.loaded = "loading";
+    this.sidebarNote(body, "Loading…");
+    const url = RECORDINGS_API + "?date=" + encodeURIComponent(group.dataset.date);
+    const { data, error } = await fetchJson(url);
+    if (!data) {
+      delete group.dataset.loaded; // retried on the next open
+      this.sidebarNote(body, "Could not load this day (" + error + ").");
+      return;
+    }
+    group.dataset.loaded = "done";
+    const recs = data.days.flatMap((day) => day.recordings);
+    body.replaceChildren(...recs.map((rec) => this.recRow(rec)));
+    if (this.activeKey) this.markActive(this.activeKey);
   },
 
   recRow(rec) {
@@ -125,6 +175,8 @@ const viewer = {
     row.dataset.key = recordingKey(rec);
     if (rec.thumb) {
       const img = document.createElement("img");
+      img.loading = "lazy"; // only thumbnails scrolled into view are fetched
+      img.decoding = "async";
       img.src = rec.thumb;
       img.alt = "";
       row.append(img);
@@ -140,6 +192,7 @@ const viewer = {
   },
 
   markActive(key) {
+    this.activeKey = key;
     this.el.querySelectorAll(".viewer-rec").forEach((row) => {
       row.classList.toggle("active", row.dataset.key === key);
     });

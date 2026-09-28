@@ -16,6 +16,7 @@ Fixes from a full code review. See [docs/guide/upgrading.md](docs/guide/upgradin
 * Settings are type-checked (422 instead of 500); `keep`, `retry_failed_after` and include/exclude codes use the same parsers as the CLI.
 * `BLACKVUESYNC_ADMIN_PASSWORD` now sets the admin password on first start.
 * Progress counts files rather than recordings, reports already-downloaded files as skipped, and shows early failures such as an unreachable dashcam.
+* Viewer: large libraries load. The sidebar lists days and loads a day's recordings when it is opened, thumbnails load lazily, and the server keeps a per-directory index instead of walking every file on each request. A 42,706-recording library previously sent 13.9 MB of JSON and 42,706 thumbnail requests at once and could crash Safari; it now shows the newest day in about 2 s (0.2 s once cached). NAS system folders (`#recycle`, `@eaDir`) are ignored. New `GET /api/viewer/days`; `GET /api/viewer/recordings` takes `?date=`.
 * Viewer: recordings with `L`/`S` upload-flag filenames play; rear-only recordings play once; GPS timing no longer runs ahead of the video; `nan` speeds no longer produce invalid JSON.
 * The web UI shows errors for failed actions, redirects to login when a session expires, and keeps working on pages open longer than an hour.
 * Docker: `/config` is created and owned by the service user, so the container starts without a `/config` mount; waitress runs 32 threads; at most 16 live-update streams.

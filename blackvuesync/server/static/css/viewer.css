@@ -1,6 +1,11 @@
 .viewer { display: grid; grid-template-columns: 220px 1fr; gap: var(--space-3, 12px); max-width: 1200px; margin: 0 auto; padding: var(--space-4, 16px); }
 .viewer-sidebar { background: var(--color-surface, #fff); border-radius: var(--radius-lg, 12px); padding: var(--space-2, 8px); max-height: 80vh; overflow-y: auto; }
-.viewer-day-label { font-size: 11px; text-transform: uppercase; color: var(--color-label-secondary, #6e6e73); margin: var(--space-2, 8px) 0 4px; }
+.viewer-day-label { display: flex; justify-content: space-between; align-items: center; width: 100%; border: 0; background: none; cursor: pointer; font-size: 11px; text-transform: uppercase; color: var(--color-label-secondary, #6e6e73); margin: var(--space-2, 8px) 0 4px; padding: 4px; border-radius: 6px; }
+.viewer-day-label::before { content: "\25B8"; margin-right: 6px; }
+.viewer-day-label[aria-expanded="true"]::before { content: "\25BE"; }
+.viewer-day-label span:first-child { margin-right: auto; }
+.viewer-day-label:hover { background: var(--color-surface-secondary, #f2f2f7); }
+.viewer-day-count { font-variant-numeric: tabular-nums; }
 .viewer-rec { display: flex; gap: 8px; align-items: center; width: 100%; border: 0; background: none; text-align: left; padding: 4px; border-radius: 6px; cursor: pointer; font-size: 12px; color: var(--color-label, #1d1d1f); }
 .viewer-rec.active { background: var(--color-accent, #0071e3); color: #fff; }
 .viewer-rec img { width: 48px; height: 30px; object-fit: cover; border-radius: 3px; background: #2c2c2e; }
