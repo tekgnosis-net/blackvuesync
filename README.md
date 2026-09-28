@@ -1,5 +1,16 @@
 # BlackVue Sync
 
+> [!IMPORTANT]
+> **This repository is archived.** Development continues as
+> **[BlackVue Sync v2](https://github.com/tekgnosis-net/blackvuesync-v2)**
+> ([documentation](https://tekgnosis-net.github.io/blackvuesync-v2/)).
+> The image `ghcr.io/tekgnosis-net/blackvuesync` no longer receives updates;
+> switch to `ghcr.io/tekgnosis-net/blackvuesync-v2:3` as described in the
+> [upgrade guide](https://tekgnosis-net.github.io/blackvuesync-v2/guide/upgrading/#from-ghcriotekgnosis-netblackvuesync-versions-23-to-28).
+> The pull requests in this repository record the development of versions
+> 2.3 to 2.8. The original project is
+> [acolomba/blackvuesync](https://github.com/acolomba/blackvuesync).
+
 [![CI](https://github.com/tekgnosis-net/blackvuesync/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/tekgnosis-net/blackvuesync/actions/workflows/ci.yml)
 [![Build Docker image](https://github.com/tekgnosis-net/blackvuesync/actions/workflows/docker-build.yml/badge.svg?branch=main)](https://github.com/tekgnosis-net/blackvuesync/actions/workflows/docker-build.yml)
 
